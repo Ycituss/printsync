@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>3D 打印文件进度工作台</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root { --bg:#f8fafc; --card:#ffffff; --ink:#3a4250; --sub:#8a94a3; --line:#edf0f5; --accent:#5b8def; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); font-size:15px; }
+  .wrap { max-width:none; margin:0; padding:16px 20px calc(16px + env(safe-area-inset-bottom)); }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .layout { display:flex; gap:18px; align-items:flex-start; min-width:0; }
+  .main { flex:1 1 auto; min-width:0; overflow-x:hidden; }
+  .sidebar { flex:0 0 300px; max-width:300px; position:sticky; top:16px; align-self:flex-start; max-height:calc(100vh - 32px); overflow-y:auto; overflow-x:hidden; }
+  .sidebar .section { margin-bottom:16px; }
+  .sidebar .section:last-child { margin-bottom:0; }
+  .logo { width:38px; height:38px; flex:0 0 38px; }
+  .htitle { font-size:19px; font-weight:700; line-height:1.2; }
+  .hsub { font-size:12px; color:var(--sub); margin-top:2px; }
+  .hright { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .sync { font-size:12px; padding:4px 10px; border-radius:20px; background:#f1f4f9; color:var(--sub); }
+  .sync.ok { background:#e7f7ec; color:#1f9d4d; }
+  .sync.warn { background:#fff4e5; color:#c4760a; }
+  .sync.err { background:#fdeaea; color:#d23b3b; }
+  .btn { border:none; border-radius:10px; padding:10px 16px; font-size:15px; cursor:pointer; background:var(--accent); color:#fff; font-weight:600; min-height:44px; }
+  .btn.ghost { background:#f1f4f9; color:var(--ink); }
+  .btn.danger { background:#fdeaea; color:#d23b3b; }
+  .section { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  .sec-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+  .sec-title { font-size:16px; font-weight:700; }
+  .sec-tag { font-size:12px; color:var(--sub); }
+  .rt-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#52C41A; margin-right:5px; vertical-align:middle; box-shadow:0 0 0 0 rgba(82,196,26,.5); animation:pulse 2s infinite; }
+  .rt-dot.stale { background:#D23B3B; animation:none; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(82,196,26,.5)} 70%{box-shadow:0 0 0 7px rgba(82,196,26,0)} 100%{box-shadow:0 0 0 0 rgba(82,196,26,0)} }
+  .pill { margin-left:auto; font-size:13px; color:var(--sub); }
+  .pill b { color:var(--accent); }
+
+  /* archive - 单独区域, 不入看板, 点击查看详情 */
+  .archive-section { padding:14px; }
+  .archive-list { display:flex; flex-direction:column; gap:6px; max-height:320px; overflow-y:auto; min-height:0; }
+  .arc-item { display:flex; align-items:center; gap:8px; padding:8px 10px; background:#fbfcfe; border:1px solid var(--line); border-radius:8px; cursor:pointer; transition:box-shadow .15s, border-color .15s; }
+  .arc-item:hover { box-shadow:0 2px 8px rgba(30,50,90,.10); border-color:#dde3ec; }
+  .arc-name { font-size:13px; font-weight:600; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .arc-machine { font-size:11px; color:#fff; background:#13C2C2; padding:1px 7px; border-radius:20px; flex:0 0 auto; }
+  .arc-empty { color:var(--sub); font-size:12px; padding:8px 4px; }
+
+  /* today: 已移除「今天要处理」区块 */
+  .empty { color:var(--sub); font-size:12px; padding:8px 4px; }
+
+  /* board - 2 列 × 3 行网格, 每块固定高度, 内容多时内部滚动 */
+  .board-section { padding:14px; }
+  .search-box { margin-left:auto; display:flex; align-items:center; gap:6px; position:relative; }
+  .search-box input { width:220px; max-width:46vw; padding:7px 28px 7px 11px; font-size:13px; border:1px solid var(--line); border-radius:20px; background:#fbfcfe; color:var(--ink); outline:none; }
+  .search-box input:focus { border-color:#cdd9ec; background:#fff; }
+  .search-clear { position:absolute; right:6px; top:50%; transform:translateY(-50%); border:none; background:transparent; color:var(--sub); cursor:pointer; font-size:13px; line-height:1; padding:4px; }
+  .board { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .col { background:#fbfcfe; border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; height:600px; min-height:0; overflow:hidden; }
+  .col-head { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; border-top:4px solid #ccc; border-radius:12px 12px 0 0; font-weight:700; background:#fff; flex:0 0 auto; }
+  .col-title { font-size:14px; }
+  .col-count { background:#f1f4f9; color:var(--sub); border-radius:20px; padding:1px 9px; font-size:12px; font-weight:700; }
+  .col-body { padding:9px; display:flex; flex-wrap:wrap; gap:7px; flex:1 1 auto; overflow-y:auto; align-content:start; min-height:0; }
+  .col-empty { color:#c4ccd6; text-align:center; padding:18px 0; font-size:12px; flex-basis:100%; }
+  .card { background:#fff; border:1px solid var(--line); border-left:3px solid var(--line); border-radius:8px; padding:7px 10px; cursor:pointer; transition:box-shadow .15s, border-color .15s; display:flex; flex-direction:column; width:fit-content; max-width:100%; min-width:90px; }
+  .card:hover { box-shadow:0 2px 8px rgba(30,50,90,.10); border-color:#dde3ec; }
+  .card.hl { border-color:var(--accent); border-left-color:var(--accent); animation:hlPulse .6s ease-in-out infinite; z-index:2; }
+  @keyframes hlPulse {
+    0%, 100% { box-shadow:0 0 0 0 rgba(91,141,239,.55); transform:translateY(0) scale(1); }
+    50% { box-shadow:0 0 0 7px rgba(91,141,239,0); transform:translateY(-3px) scale(1.035); }
+  }
+  .card.dragging { opacity:.4; cursor:grabbing; transition:none; pointer-events:none; }
+  .col-body.dragging-on * { transition:none !important; }
+  .col-body.drag-over { background:#eef4ff; }
+  .c-name { font-weight:600; font-size:14px; line-height:1.35; word-break:break-word; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .c-meta { margin-top:5px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  .tag { font-size:11px; background:#f1f4f9; color:var(--sub); border-radius:4px; padding:0 6px; line-height:18px; }
+  .tag.status { color:#fff; font-weight:600; }
+  .note-flag { font-size:10px; color:var(--accent); font-weight:600; background:#eef3ff; border:1px solid #dbe7ff; border-radius:4px; padding:0 5px; line-height:16px; cursor:help; white-space:nowrap; }
+  .mini { border:none; border-radius:6px; padding:5px 9px; font-size:12px; cursor:pointer; background:#f1f4f9; color:var(--ink); min-height:30px; white-space:nowrap; }
+  .mini.primary { background:var(--accent); color:#fff; font-weight:600; }
+  .c-actions { display:flex; gap:5px; flex-wrap:nowrap; margin-top:7px; }
+
+  /* machines */
+  .machine-section { padding:12px; min-width:0; overflow:hidden; }
+  .machineGrid { display:grid; grid-template-columns:1fr; gap:8px; min-width:0; }
+  .mc { box-sizing:border-box; width:100%; min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; padding:10px 11px; background:#fff; cursor:pointer; transition:box-shadow .15s,border-color .15s; }
+  .mc:hover { box-shadow:0 3px 10px rgba(0,0,0,.10); border-color:#dde3ec; }
+  .mc-name { font-weight:700; font-size:14px; display:flex; justify-content:space-between; align-items:center; gap:6px; min-width:0; }
+  .mc-name .mn-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+  .mc-state { font-size:11px; padding:2px 8px; border-radius:20px; color:#fff; flex:0 0 auto; white-space:nowrap; }
+  .mc-file { margin-top:5px; font-size:12px; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mc-file.muted { color:#9ca5b2; }
+  .mc-prog { margin-top:6px; height:6px; background:#f1f4f9; border-radius:4px; overflow:hidden; }
+  .mc-prog-fill { height:100%; background:var(--accent); border-radius:4px; transition:width .3s; }
+  .mc-sub { margin-top:4px; font-size:11px; color:var(--sub); line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mc-finish { color:#2f6fd0; font-weight:600; white-space:normal; }
+  /* 机器出错块：错误码 + 可换行中文含义，不截断 */
+  .mc-err { margin-top:6px; padding:6px 8px; background:#fdeaea; border:1px solid #f5c2c2; border-radius:6px; }
+  .mc-err-code { font-size:11px; font-weight:700; color:#d23b3b; margin-bottom:2px; white-space:nowrap; }
+  .mc-err-desc { font-size:11px; color:#a8201a; line-height:1.4; word-break:break-word; white-space:normal; }
+
+  /* stats */
+  .stats-section { padding:12px 14px; }
+  .stat-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .stat-row:last-child { margin-bottom:0; }
+  .stat-label { flex:0 0 90px; font-size:12px; display:flex; align-items:center; gap:6px; }
+  .stat-track { flex:1 1 auto; height:12px; background:#f1f4f9; border-radius:6px; overflow:hidden; }
+  .stat-fill { height:100%; border-radius:6px; transition:width .3s; }
+  .stat-num { flex:0 0 26px; text-align:right; font-weight:700; font-size:12px; }
+
+  /* footer */
+  .foot { display:flex; gap:10px; flex-wrap:wrap; padding:12px 14px; }
+  .foot .btn { flex:1 1 auto; font-size:14px; padding:9px 14px; min-height:40px; }
+
+  /* modal */
+  .modal { position:fixed; inset:0; background:rgba(20,30,50,.45); display:none; align-items:flex-end; justify-content:center; z-index:50; }
+  .modal.show { display:flex; }
+  .sheet { background:#fff; width:100%; max-width:480px; border-radius:16px 16px 0 0; padding:18px 18px calc(18px + env(safe-area-inset-bottom)); max-height:92vh; overflow-y:auto; }
+  .modal-title { font-size:17px; font-weight:700; margin-bottom:14px; }
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:13px; color:var(--sub); margin-bottom:5px; }
+  .field input, .field select, .field textarea { width:100%; padding:11px 12px; font-size:16px; border:1px solid var(--line); border-radius:10px; background:#fbfcfe; color:var(--ink); }
+  .field textarea { min-height:64px; resize:vertical; }
+  .field-hint { font-size:12px; color:var(--sub); margin-top:5px; line-height:1.5; }
+  .field-hint b { color:#1890FF; font-weight:600; }
+  .sheet-actions { display:flex; gap:10px; margin-top:8px; }
+  .sheet-actions .btn { flex:1 1 auto; }
+  .hidden { display:none !important; }
+  /* 机器详情弹窗 */
+  #machineModal .sheet { max-width:420px; }
+  .mm-title { font-size:18px; font-weight:700; margin-bottom:14px; }
+  .mm-row { display:flex; justify-content:space-between; gap:12px; padding:11px 2px; border-bottom:1px solid var(--line); }
+  .mm-row:last-child { border-bottom:none; }
+  .mm-k { color:var(--sub); font-size:14px; flex:0 0 auto; }
+  .mm-v { font-size:14px; font-weight:600; color:var(--ink); text-align:right; word-break:break-all; }
+  .mm-sep { margin:14px 0 4px; font-size:12px; font-weight:700; letter-spacing:.05em; color:var(--sub); text-transform:uppercase; }
+  .mm-ams .mm-k { display:flex; align-items:center; gap:7px; }
+  .mm-dot { width:13px; height:13px; border-radius:3px; border:1px solid rgba(0,0,0,.18); display:inline-block; flex:0 0 auto; }
+  .mm-now { background:#e8f5e9; color:#1b7a36; border:1px solid #b7e0c2; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:700; }
+  #toast { position:fixed; left:50%; bottom:30px; transform:translateX(-50%) translateY(20px); background:#1f2733; color:#fff; padding:10px 18px; border-radius:24px; font-size:14px; opacity:0; pointer-events:none; transition:.25s; z-index:60; }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast.ok { background:#1f9d4d; }
+  #toast.err { background:#d23b3b; }
+
+  @media (min-width:780px) {
+    .modal { align-items:center; }
+    .sheet { border-radius:16px; }
+  }
+  @media (max-width:1100px) {
+    .layout { flex-direction:column; }
+    .sidebar { flex:1 1 auto; position:static; max-height:none; width:100%; display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .sidebar .section { margin-bottom:0; }
+  }
+  @media (max-width:700px) {
+    .sidebar { grid-template-columns:1fr; }
+    .wrap { padding:12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg class="logo" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="3" stroke="#3b6cff" stroke-width="2"/>
+      <path d="M7 15l3-4 3 3 4-6" stroke="#3b6cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="17" cy="8" r="1.6" fill="#3b6cff"/>
+    </svg>
+    <div>
+      <div class="htitle">3D 打印文件进度工作台</div>
+      <div class="hsub">本地版 · 零云端 · 同局域网多设备可访问</div>
+    </div>
+    <div class="hright">
+      <span id="syncStatus" class="sync">连接中…</span>
+      <button id="addBtn" class="btn">＋ 添加文件</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main class="main">
+      <div class="section board-section">
+        <div class="sec-head">
+          <span class="sec-title">文件看板</span>
+          <div class="search-box">
+            <input id="searchInput" type="text" placeholder="搜索文件名 / 备注 / 机器…" autocomplete="off">
+            <button id="searchClear" class="search-clear" title="清除" style="display:none">✕</button>
+          </div>
+        </div>
+        <div id="board" class="board"></div>
+      </div>
+
+      <div class="section stats-section">
+        <div class="sec-head">
+          <span class="sec-title">统计概览</span>
+          <span class="pill">共 <b id="totalCount">0</b> 个文件</span>
+        </div>
+        <div id="statsBars"></div>
+      </div>
+
+      <div class="section foot">
+        <button id="exportBtn" class="btn ghost">导出备份</button>
+        <button id="importBtn" class="btn ghost">导入恢复</button>
+        <button id="clearBtn" class="btn danger">清空全部</button>
+      </div>
+    </main>
+
+    <aside class="sidebar">
+      <div class="section machine-section">
+        <div class="sec-head">
+          <span class="sec-title">机器状态</span>
+          <span class="sec-tag"><span id="rtDot" class="rt-dot"></span><span id="lastSync">—</span></span>
+        </div>
+        <div id="machineGrid" class="machineGrid"></div>
+      </div>
+
+      <div class="section archive-section">
+        <div class="sec-head">
+          <span class="sec-title">归档</span>
+          <span class="pill"><b id="archiveCount">0</b></span>
+        </div>
+        <div id="archiveList" class="archive-list"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div id="modal" class="modal">
+  <div class="sheet">
+    <div id="modalTitle" class="modal-title">添加打印文件</div>
+    <div class="field">
+      <label for="fName">文件名称</label>
+      <textarea id="fName" rows="3" placeholder="例如：齿轮支架 v2"></textarea>
+      <div id="fNameHint" class="field-hint"></div>
+    </div>
+    <div class="field">
+      <label for="fStatus">状态</label>
+      <select id="fStatus"></select>
+    </div>
+    <div class="field">
+      <label for="fMachine">机器</label>
+      <select id="fMachine"></select>
+    </div>
+    <div class="field">
+      <label for="fQty">数量</label>
+      <input id="fQty" type="number" min="0" placeholder="打印件数">
+    </div>
+    <div class="field">
+      <label for="fNote">备注</label>
+      <textarea id="fNote" placeholder="问题与改进点、摆盘/填表进度等"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button id="cancelBtn" class="btn ghost">取消</button>
+      <button id="delBtn" class="btn danger" style="display:none">删除</button>
+      <button id="saveBtn" class="btn">保存</button>
+    </div>
+  </div>
+</div>
+<input id="importFile" type="file" accept="application/json" class="hidden">
+<div id="toast" class="toast"></div>
+
+<div id="machineModal" class="modal" onclick="if(event.target===this)hideMachineModal()">
+  <div class="sheet">
+    <div class="mm-title">机器</div>
+    <div class="mm-body"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" onclick="hideMachineModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var STATUSES = ['待打印', '打印中', '待摆盘填表', '需改进重打', '已完成', '已放弃', '归档'];
+  var BOARD_ORDER = ['待打印', '待摆盘填表', '打印中', '需改进重打', '已完成', '已放弃'];
+  var MACHINES = ['机器1', '机器2', '机器3', '机器4', '机器5', '机器6'];
+  var ATTENTION = ['打印中', '需改进重打', '待摆盘填表'];
+  var NEXT = {
+    '待打印': '打印中',
+    '打印中': '待摆盘填表',
+    '待摆盘填表': '已完成',
+    '需改进重打': '打印中',
+    '已完成': '归档'
+  };
+  var COLORS = {
+    '待打印': '#5B8FF9',
+    '打印中': '#FA8C16',
+    '需改进重打': '#F5222D',
+    '待摆盘填表': '#722ED1',
+    '已完成': '#52C41A',
+    '已放弃': '#8C8C8C',
+    '归档': '#13C2C2'
+  };
+  var MSTATE_COLORS = {
+    '空闲': '#52C41A',
+    '打印中': '#FA8C16',
+    '暂停': '#722ED1',
+    '已完成': '#13C2C2',
+    '失败': '#F5222D',
+    '出错': '#D23B3B',
+    '在线': '#1890FF',
+    '未连接': '#BFBFBF',
+    '未配置': '#BFBFBF',
+    '离线': '#BFBFBF'
+  };
+  var FORM_KEY = 'wb_3dprint_form_cache';
+  var JOBS = [];
+  var PMAP = {};
+  var editingId = null;
+  var searchTerm = '';
+  var canEdit = false;
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function todayISO() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function closestButton(node) {
+    while (node && node.nodeType === 1) {
+      if (node.tagName && node.tagName.toLowerCase() === 'button') return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+  function fmtRemain(min) {
+    min = Number(min) || 0;
+    if (min <= 0) return '—';
+    var h = Math.floor(min / 60), m = min % 60;
+    return (h > 0 ? h + ' 小时 ' : '') + m + ' 分';
+  }
+
+  // 把后端 finish_est（"YYYY-MM-DD HH:MM:SS" 北京）简短化为侧栏显示：
+  // 当天 -> "HH:MM 完成"；跨天 -> "MM-DD HH:MM 完成"
+  function fmtFinish(s) {
+    if (!s) return null;
+    var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(s.trim());
+    if (!m) return s; // 解析不了就原样返回
+    var now = new Date();
+    var sameDay = (now.getFullYear() == +m[1] && (now.getMonth() + 1) == +m[2] && now.getDate() == +m[3]);
+    return (sameDay ? '' : (m[2] + '-' + m[3] + ' ')) + m[4] + ':' + m[5] + ' 完成';
+  }
+
+  // ---------- 本地 API ----------
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    return fetch(path, opts).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.status === 204 ? null : r.json();
+    });
+  }
+
+  // ---------- store ----------
+  function firstFreeMachine(jobs) {
+    var used = {};
+    jobs.forEach(function (j) { if (j.status === '打印中' && j.machine) used[j.machine] = true; });
+    for (var i = 0; i < MACHINES.length; i++) { if (!used[MACHINES[i]]) return MACHINES[i]; }
+    return '';
+  }
+  function addJob(job) {
+    return api('/api/jobs', { method: 'POST', body: JSON.stringify(job) }).then(function (res) { job.id = res.id; return job; });
+  }
+  function updateJob(job) {
+    return api('/api/jobs/' + encodeURIComponent(job.id), { method: 'PUT', body: JSON.stringify(job) }).then(function () { return job; });
+  }
+  function deleteJob(id) { return api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }); }
+  function clearAll() { return api('/api/jobs', { method: 'DELETE' }); }
+  function loadJobs() { return api('/api/jobs').catch(function () { return []; }); }
+
+  // ---------- render ----------
+  // 注：「今天要处理」区块已移除，renderToday 一并删除
+
+  function card(j) {
+    var c = document.createElement('div'); c.className = 'card';
+    c.draggable = !!canEdit;
+    c.dataset.id = j.id;
+    c.dataset.status = j.status;
+    c.style.borderLeftColor = COLORS[j.status] || '#8C8C8C';
+    var meta = [];
+    meta.push('<span class="tag status" style="background:' + (COLORS[j.status] || '#8C8C8C') + '">' + esc(j.status) + '</span>');
+    if (j.machine) meta.push('<span class="tag">' + esc(j.machine) + '</span>');
+    if (j.qty) meta.push('<span class="tag">×' + esc(j.qty) + '</span>');
+    if (j.note) meta.push('<span class="note-flag" title="' + esc(j.note) + '">备注</span>');
+    var html = '<div class="c-name">' + esc(j.name) + '</div>';
+    html += '<div class="c-meta">' + meta.join('') + '</div>';
+    if (canEdit) {
+      html += '<div class="c-actions">';
+      if (NEXT[j.status]) html += '<button class="mini primary" data-act="next" data-id="' + j.id + '">' + NEXT[j.status] + ' ▶</button>';
+      html += '<button class="mini" data-act="edit" data-id="' + j.id + '">编辑</button>';
+      html += '</div>';
+    }
+    c.innerHTML = html;
+    c.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/plain', j.id);
+      e.dataTransfer.effectAllowed = 'move';
+      // 固定宽度：避免半透明卡片在 flex-wrap 中插入时宽度跳动
+      c.style.width = c.offsetWidth + 'px';
+      setTimeout(function () {
+        c.classList.add('dragging');
+        if (c.parentNode) c.parentNode.classList.add('dragging-on');
+      }, 0);
+    });
+    c.addEventListener('dragend', function () {
+      c.classList.remove('dragging');
+      c.style.width = '';
+      var p = c.parentNode;
+      if (p) p.classList.remove('dragging-on');
+      document.querySelectorAll('.col-body.drag-over').forEach(function (b) { b.classList.remove('drag-over'); });
+    });
+    c.addEventListener('click', function (e) {
+      var b = closestButton(e.target);
+      if (b) {
+        var act = b.getAttribute('data-act');
+        var id = b.getAttribute('data-id');
+        if (act === 'next') quickNext(id);
+        else if (act === 'edit') openEditor(id);
+        return;
+      }
+      openEditor(j.id);
+    });
+    return c;
+  }
+
+  var COL_HEIGHT = { '待打印':450, '待摆盘填表':450, '打印中':300, '需改进重打':300, '已完成':300, '已放弃':300 };
+  function matchSearch(j) {
+    if (!searchTerm) return true;
+    var q = searchTerm;
+    return (j.name && j.name.toLowerCase().indexOf(q) >= 0) ||
+           (j.note && j.note.toLowerCase().indexOf(q) >= 0) ||
+           (j.machine && j.machine.toLowerCase().indexOf(q) >= 0);
+  }
+  var hlTimer = null;
+  function renderBoard(jobs) {
+    var board = el('board');
+    // 渲染前记录各列滚动位置，渲染后恢复，避免点击流程/刷新导致滚动条被重置
+    var savedScroll = {};
+    board.querySelectorAll('.col-body').forEach(function (b) {
+      var st = b.getAttribute('data-status');
+      if (st) savedScroll[st] = b.scrollTop;
+    });
+    board.innerHTML = '';
+    var matched = searchTerm ? jobs.filter(matchSearch) : jobs;
+    // 搜索结果只有 1 个时，正常显示全部结果，仅高亮那一个
+    var view = (searchTerm && matched.length === 1) ? jobs : matched;
+    BOARD_ORDER.forEach(function (st) {
+      var col = document.createElement('div'); col.className = 'col';
+      col.style.height = (COL_HEIGHT[st] || 300) + 'px';
+      var list = view.filter(function (j) { return j.status === st; });
+      var head = document.createElement('div'); head.className = 'col-head';
+      head.style.borderTopColor = COLORS[st];
+      head.innerHTML = '<span class="col-title">' + st + '</span><span class="col-count">' + list.length + '</span>';
+      var body = document.createElement('div'); body.className = 'col-body'; body.dataset.status = st;
+      if (list.length === 0) {
+        var e = document.createElement('div'); e.className = 'col-empty'; e.textContent = (searchTerm ? '无匹配' : '暂无任务'); body.appendChild(e);
+      } else {
+        list.forEach(function (j) {
+          var c = card(j);
+          if (searchTerm && matched.length === 1 && matchSearch(j)) c.classList.add('hl');
+          body.appendChild(c);
+        });
+      }
+      enableDrop(body, st);
+      col.appendChild(head); col.appendChild(body);
+      board.appendChild(col);
+    });
+    // 单结果全量显示时，自动把高亮卡滚动到可见（含块内滚动条）
+    if (searchTerm && matched.length === 1) {
+      var hl = board.querySelector('.card.hl');
+      if (hl) setTimeout(function () { hl.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 30);
+    }
+    if (searchTerm) scheduleHlClear();
+    // 恢复各列滚动位置（避免点击流程/刷新导致滚动条被重置到顶部）
+    BOARD_ORDER.forEach(function (st) {
+      if (savedScroll[st] != null) {
+        var b = board.querySelector('.col-body[data-status="' + st + '"]');
+        if (b) b.scrollTop = savedScroll[st];
+      }
+    });
+  }
+  function scheduleHlClear() {
+    if (hlTimer) clearTimeout(hlTimer);
+    hlTimer = setTimeout(function () {
+      document.querySelectorAll('#board .card.hl').forEach(function (c) { c.classList.remove('hl'); });
+      hlTimer = null;
+    }, 3000);
+  }
+  function applySearch(v) {
+    searchTerm = (v || '').trim().toLowerCase();
+    el('searchClear').style.display = searchTerm ? '' : 'none';
+    renderBoard(JOBS);
+  }
+
+  // 拖放：列内重排 + 跨列改变状态；拖动结束持久化顺序
+  function enableDrop(body, colStatus) {
+    if (!canEdit) return;
+    body.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      body.classList.add('drag-over');
+      var dragging = document.querySelector('.card.dragging');
+      if (!dragging) return;
+      var after = getDragAfter(body, e.clientX, e.clientY);
+      // 去抖：锚点 id 未变化则不重复移动，避免频繁重排造成闪烁
+      var afterId = after ? after.dataset.id : '__end__';
+      if (afterId === body._lastAfterId && dragging.parentNode === body) return;
+      body._lastAfterId = afterId;
+      if (after == null) body.appendChild(dragging);
+      else body.insertBefore(dragging, after);
+    });
+    body.addEventListener('dragleave', function (e) {
+      if (!body.contains(e.relatedTarget)) {
+        body.classList.remove('drag-over');
+        body._lastAfterId = undefined;
+      }
+    });
+    body.addEventListener('drop', function (e) {
+      e.preventDefault();
+      body.classList.remove('drag-over');
+      body._lastAfterId = undefined;
+      var dragging = document.querySelector('.card.dragging');
+      if (!dragging) return;
+      var newStatus = colStatus;
+      var id = dragging.dataset.id;
+      // 跨列：更新该 job 状态（本地同步）
+      if (dragging.dataset.status !== newStatus) {
+        dragging.dataset.status = newStatus;
+        dragging.style.borderLeftColor = COLORS[newStatus] || '#8C8C8C';
+        for (var k = 0; k < JOBS.length; k++) { if (JOBS[k].id === id) { JOBS[k].status = newStatus; break; } }
+      }
+      // 关键：把拖拽后的 DOM 顺序与状态同步回 JOBS，再整块重建，
+      // 否则右上角计数与卡片内状态标识不会刷新（此前只移动了 DOM 节点）。
+      syncBoardOrderFromDom();
+      renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+      updateJobStatus(id, newStatus);
+      persistOrder();
+    });
+  }
+
+  // 在 flex 换行布局下，根据指针位置找应插入到哪个卡片"之前"
+  // 规则：找指针正下方最近的卡片，指针在其左半 -> 插它前；右半 -> 插它后(即其下一个兄弟前)；无命中 -> 末尾
+  function getDragAfter(container, x, y) {
+    var els = Array.prototype.slice.call(container.querySelectorAll('.card:not(.dragging)'));
+    if (els.length === 0) return null;
+    var best = null, bestDist = Infinity;
+    els.forEach(function (child) {
+      var box = child.getBoundingClientRect();
+      // 只对指针所在的行(纵向重叠)或下方最近行做候选
+      if (y > box.bottom) return; // 指针在该卡整行之下，不可能是它的上方插入点
+      var cx = box.left + box.width / 2;
+      var cy = box.top + box.height / 2;
+      var dx = Math.abs(x - cx);
+      var dy = y - box.top; // 指针相对卡顶的纵向偏移
+      var dist = dx * dx + (dy < 0 ? dy * dy * 4 : 0); // 上方略微加权
+      if (dist < bestDist) { bestDist = dist; best = child; }
+    });
+    if (!best) return null;
+    var box = best.getBoundingClientRect();
+    var cx = box.left + box.width / 2;
+    if (x < cx) return best;                 // 左半 -> 插到该卡之前
+    // 右半 -> 插到该卡之后(即其下一个兄弟之前)
+    var next = best.nextElementSibling;
+    while (next && (next.classList.contains('dragging') || !next.classList.contains('card'))) {
+      next = next.nextElementSibling;
+    }
+    return next; // 可能为 null(末尾)
+  }
+
+  // 收集当前看板所有卡片顺序（按 DOM 顺序），调用后端重排
+  function persistOrder() {
+    // 看板内的卡片顺序优先；归档等不在 #board 的 job 必须一并带上，
+    // 否则后端若按列表覆盖会误删归档文件（曾导致拖拽跨状态丢失大量文件）。
+    var boardIds = [];
+    document.querySelectorAll('#board .card').forEach(function (c) { boardIds.push(c.dataset.id); });
+    var inBoard = {};
+    boardIds.forEach(function (id) { inBoard[id] = true; });
+    var allIds = boardIds.slice();
+    JOBS.forEach(function (j) { if (!inBoard[j.id]) allIds.push(j.id); });
+    api('/api/jobs/reorder', { method: 'POST', body: JSON.stringify({ ordered_ids: allIds }) })
+      .then(function () { /* 顺序已保存 */ })
+      .catch(function () { toast('排序保存失败', 'err'); });
+  }
+
+  function updateJobStatus(id, status) {
+    api('/api/jobs/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ status: status }) })
+      .catch(function () { toast('状态更新失败', 'err'); });
+  }
+
+  function renderMachines(jobs, pmap) {
+    pmap = pmap || {};
+    var g = el('machineGrid'); g.innerHTML = '';
+    var nowTs = Date.now();
+    MACHINES.forEach(function (m) {
+      var p = pmap[m];
+      var state = p ? p.state : '未连接';
+      // 断连超时判定：后端 state 仍显示打印中/在线，但超过 40s 没收到任何报文，
+      // 说明 MQTT 实际已掉线，覆盖显示为"离线"（避免真掉线还显示打印中）。
+      if (p && p.connected !== false && state !== '未配置' && state !== '未连接') {
+        var upd = p.updated ? Date.parse(p.updated.replace(' ', 'T') + (p.updated.indexOf('T') < 0 ? 'Z' : '')) : 0;
+        if (upd && nowTs - upd > 40000) {
+          state = '离线';
+          p = Object.assign({}, p, { state: '离线', connected: false });
+        }
+      }
+      if (!p || p.connected === false) state = (p && p.state === '未配置') ? '未配置' : '离线';
+      var color = MSTATE_COLORS[state] || '#BFBFBF';
+      var card = document.createElement('div'); card.className = 'mc'; card.dataset.m = m;
+      var html = '<div class="mc-name"><span class="mn-text">' + esc(m) + '</span><span class="mc-state" style="background:' + color + '">' + state + '</span></div>';
+      // 只要"有文件名 或 进度>0 或 处于进行中/出错状态"，就展示进度/详情行
+      var showDetail = p && (p.file || (p.percent > 0) || state === '打印中' || state === '已完成' || state === '暂停' || state === '失败' || state === '出错');
+      if (showDetail) {
+        if (state === '打印中' || (p.percent > 0 && state !== '出错')) {
+          html += '<div class="mc-prog"><div class="mc-prog-fill" style="width:' + Math.max(0, Math.min(100, p.percent)) + '%"></div></div>';
+        }
+        if (state === '打印中') {
+          html += '<div class="mc-sub">进度 ' + p.percent + '% · 剩余 ' + fmtRemain(p.remain) + (p.temp ? ' · 喷嘴 ' + p.temp + '℃' : '') + '</div>';
+          var fe = fmtFinish(p.finish_est);
+          if (fe) html += '<div class="mc-sub mc-finish">预计 ' + esc(fe) + '</div>';
+        } else if (state === '出错') {
+          // 出错：醒目红字 + 错误码(十六进制) + 完整中文含义（可换行，不截断）
+          var ec = (p.error_code != null) ? ('0x' + Number(p.error_code).toString(16).toUpperCase().padStart(8, '0')) : '';
+          var errTxt = p.error || '打印出错，已自动暂停';
+          html += '<div class="mc-err">'
+                + '<div class="mc-err-code">⚠ 出错' + (ec ? ' · 错误码 ' + ec : '') + '</div>'
+                + '<div class="mc-err-desc">' + esc(errTxt) + '</div>'
+                + '</div>';
+        } else {
+          html += '<div class="mc-sub">' + (p.temp ? '喷嘴 ' + p.temp + '℃' : '点击查看详情') + '</div>';
+        }
+        html += '<div class="mc-file">' + (p.file ? esc(p.file) : (state || '未知')) + '</div>';
+      } else if (state === '未配置') {
+        html += '<div class="mc-file muted">未配置：请在 config.json 填写该机 IP/序列号/Access Code</div>';
+      } else if (state === '未连接' || state === '离线') {
+        html += '<div class="mc-file muted">未同步：请确认脚本已运行且该机在线</div>';
+      } else if (state === '空闲') {
+        html += '<div class="mc-file muted">无任务' + (p.temp ? ' · 喷嘴 ' + p.temp + '℃' : '') + '</div>';
+      } else {
+        html += '<div class="mc-file">' + (p.file ? esc(p.file) : (state || '未知')) + (p.temp ? ' · 喷嘴 ' + p.temp + '℃' : '') + '</div>';
+      }
+      card.innerHTML = html;
+      g.appendChild(card);
+    });
+    // 卡片点击 -> 弹窗看这台机器全部信息
+    g.onclick = function (ev) {
+      var c = ev.target.closest('.mc');
+      if (!c || !c.dataset.m) return;
+      showMachineModal(c.dataset.m);
+    };
+  }
+
+  function fmtStateColor(st) { return MSTATE_COLORS[st] || '#BFBFBF'; }
+
+  // 把后端给的时间(UTC的 Z 结尾 / 北京时间的 +08:00 结尾)统一转成北京时间易读字符串
+  function fmtBJTime(s) {
+    if (!s) return '—';
+    var iso = s.trim().replace(' ', 'T');
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return s; // 解析不了就原样返回
+    // 后端 now_iso 已是北京时间(+08:00)，直接用; 若带 Z 则按 UTC 转
+    var ms = d.getTime();
+    var bj = new Date(ms + 8 * 3600 * 1000);
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    return bj.getUTCFullYear() + '-' + p2(bj.getUTCMonth() + 1) + '-' + p2(bj.getUTCDate()) +
+      ' ' + p2(bj.getUTCHours()) + ':' + p2(bj.getUTCMinutes()) + ':' + p2(bj.getUTCSeconds()) + ' (北京)';
+  }
+
+  function showMachineModal(name) {
+    // 点开详情时主动拉一次最新机器状态，避免依赖上一轮轮询(可能为空/过期)的 PMAP
+    api('/api/machines').then(function (pmap) {
+      if (pmap && typeof pmap === 'object') PMAP = pmap;
+      _renderMachineModal(name);
+    }).catch(function () {
+      // 拉取失败则退化为使用内存 PMAP，保证仍能查看
+      _renderMachineModal(name);
+    });
+  }
+  function _renderMachineModal(name) {
+    var p = PMAP[name] || {};
+    var st = p.state || '未连接';
+    var rows = [
+      ['状态', st],
+      ['当前文件', p.file || '—'],
+      ['进度', (p.percent != null ? p.percent : 0) + '%'],
+      ['剩余时间', fmtRemain(p.remain || 0)],
+      ['预计完成', p.finish_est ? (p.finish_est + ' (北京)') : (st === '打印中' ? '计算中…' : '—')],
+      ['喷嘴温度', (p.temp != null ? p.temp : 0) + '℃'],
+      ['连接状态', p.connected ? '已连接' : '未连接'],
+      ['最后更新', fmtBJTime(p.updated)]
+    ];
+    // 出错时额外展示错误原因（前盖脱落等），并标红
+    var errHtml = '';
+    if (p.error) {
+      var ec = p.error_code != null ? ('0x' + Number(p.error_code).toString(16).toUpperCase().padStart(8, '0')) : '';
+      errHtml = '<div class="mm-row" style="border-bottom:2px solid #f5c6c6;">' +
+        '<span class="mm-k" style="color:#d23b3b;">⚠ 出错原因</span>' +
+        '<span class="mm-v" style="color:#d23b3b;">' + esc(p.error) + (ec ? ' (' + ec + ')' : '') + '</span></div>';
+    }
+    var html = '';
+    rows.forEach(function (r) {
+      html += '<div class="mm-row"><span class="mm-k">' + r[0] + '</span><span class="mm-v">' + esc(r[1]) + '</span></div>';
+    });
+    if (errHtml) html += errHtml;
+    // AMS 料盘区块
+    var ams = p.ams;
+    if (ams && ams.length) {
+      html += '<div class="mm-sep">AMS 料盘（剩余长度）</div>';
+      ams.forEach(function (t) {
+        var rem = (t.剩余米 != null) ? (t.剩余米 + ' m') : '未称重';
+        var total = (t.总长米 != null) ? (' / 总长 ' + t.总长米 + ' m') : '';
+        var nowTag = t.当前 ? ' <span class="mm-now">当前</span>' : '';
+        html += '<div class="mm-row mm-ams">' +
+          '<span class="mm-k"><span class="mm-dot" style="background:' + esc(t.颜色) + '"></span>' + esc(t.槽位) + nowTag + '</span>' +
+          '<span class="mm-v">' + esc(t.类型) + ' · 剩余 ' + rem + total + '</span>' +
+          '</div>';
+      });
+    }
+    var box = el('machineModal');
+    box.querySelector('.mm-title').textContent = name;
+    box.querySelector('.mm-title').style.color = fmtStateColor(st);
+    box.querySelector('.mm-body').innerHTML = html;
+    box.classList.add('show');
+  }
+  function hideMachineModal() {
+    var box = el('machineModal'); if (box) box.classList.remove('show');
+  }
+  window.hideMachineModal = hideMachineModal;
+
+  function renderStats(jobs) {
+    var box = el('statsBars'); box.innerHTML = '';
+    var counts = {}; STATUSES.forEach(function (s) { counts[s] = 0; });
+    jobs.forEach(function (j) { if (counts[j.status] != null) counts[j.status]++; });
+    var max = 1;
+    STATUSES.forEach(function (s) { if (counts[s] > max) max = counts[s]; });
+    STATUSES.forEach(function (s) {
+      var cnt = counts[s];
+      var row = document.createElement('div'); row.className = 'stat-row';
+      row.innerHTML =
+        '<div class="stat-label"><span class="dot" style="background:' + COLORS[s] + '"></span>' + s + '</div>' +
+        '<div class="stat-track"><div class="stat-fill" style="width:' + (cnt / max * 100) + '%;background:' + COLORS[s] + '"></div></div>' +
+        '<div class="stat-num">' + cnt + '</div>';
+      box.appendChild(row);
+    });
+    el('totalCount').textContent = jobs.length;
+  }
+
+  function renderArchive(jobs) {
+    var box = el('archiveList'); if (!box) return;
+    var list = jobs.filter(function (j) { return j.status === '归档'; });
+    var cnt = el('archiveCount'); if (cnt) cnt.textContent = list.length;
+    box.innerHTML = '';
+    if (list.length === 0) {
+      box.innerHTML = '<div class="arc-empty">暂无归档文件</div>';
+      return;
+    }
+    list.forEach(function (j) {
+      var item = document.createElement('div'); item.className = 'arc-item';
+      item.innerHTML =
+        '<span class="arc-name">' + esc(j.name) + '</span>' +
+        (j.machine ? '<span class="arc-machine">' + esc(j.machine) + '</span>' : '');
+      item.addEventListener('click', function () { openEditor(j.id); });
+      box.appendChild(item);
+    });
+  }
+
+  function setSync(text, cls) {
+    var s = el('syncStatus'); if (!s) return;
+    s.textContent = text; s.className = 'sync ' + (cls || '');
+  }
+
+  function applyEditMode() {
+    var on = !!canEdit;
+    if (el('addBtn')) el('addBtn').style.display = on ? '' : 'none';
+    if (el('clearBtn')) el('clearBtn').style.display = on ? '' : 'none';
+    if (el('importBtn')) el('importBtn').style.display = on ? '' : 'none';
+  }
+  function refresh() {
+    setSync('同步中…', 'warn');
+    api('/api/data').then(function (d) {
+      JOBS = d.jobs || [];
+      canEdit = !!(d.canEdit);
+      applyEditMode();
+      renderBoard(JOBS); renderMachines(JOBS, d.machines || {}); renderStats(JOBS); renderArchive(JOBS);
+      setSync('已同步 · 本地', 'ok');
+    }).catch(function (err) {
+      console.error(err);
+      setSync('加载失败', 'err');
+      toast('数据加载失败', 'err');
+    });
+  }
+
+  // 流转去重锁：防止同一文件在异步期间被重复 next（极端连点/重复事件）
+  var pendingNext = {};
+  // 精准移动：只把被点的卡片从源列移到目标列，其余卡片 DOM 不动，
+  // 避免连续快速点击时整块重建看板导致点击目标漂移、滚动条跳动、命中错误卡片。
+  function refreshCol(body) {
+    if (!body) return;
+    var cards = body.querySelectorAll('.card');
+    var emptyEl = body.querySelector('.col-empty');
+    if (cards.length === 0 && !emptyEl) {
+      var e = document.createElement('div'); e.className = 'col-empty'; e.textContent = '暂无任务'; body.appendChild(e);
+    } else if (cards.length > 0 && emptyEl) {
+      body.removeChild(emptyEl);
+    }
+    var cnt = body.parentNode.querySelector('.col-count');
+    if (cnt) cnt.textContent = cards.length;
+  }
+  function moveJobCard(id, toStatus) {
+    var board = el('board');
+    var oldEl = board.querySelector('.card[data-id="' + id + '"]');
+    if (!oldEl) { renderBoard(JOBS); return; }   // 兜底：找不到则整块重建
+    var fromBody = oldEl.parentNode;
+    fromBody.removeChild(oldEl);
+    var toBody = board.querySelector('.col-body[data-status="' + toStatus + '"]');
+    if (toBody) {
+      toBody.innerHTML = '';
+      JOBS.filter(function (x) { return x.status === toStatus; }).forEach(function (x) { toBody.appendChild(card(x)); });
+      refreshCol(toBody);
+    }
+    // toStatus 不在看板（如归档）：卡片已从源列移除，由 renderArchive 展示，无需插入
+    refreshCol(fromBody);
+  }
+
+  // 把当前看板 DOM 的顺序与所在列状态同步回 JOBS（含跨列流转）。
+  // 看板内的 job 按 DOM 顺序重排并同步 status；不在看板的（归档/搜索隐藏）保持原相对顺序追加末尾。
+  function syncBoardOrderFromDom() {
+    var pos = {}; var ordered = []; var statusOf = {};
+    document.querySelectorAll('#board .col-body').forEach(function (b) {
+      var st = b.getAttribute('data-status');
+      b.querySelectorAll('.card').forEach(function (c) {
+        var cid = c.dataset.id;
+        pos[cid] = ordered.length;
+        statusOf[cid] = st;
+        ordered.push(cid);
+      });
+    });
+    var boardPart = []; var rest = [];
+    JOBS.forEach(function (j) {
+      if (pos[j.id] != null) boardPart.push(j);
+      else rest.push(j);
+    });
+    boardPart.sort(function (a, b) { return pos[a.id] - pos[b.id]; });
+    boardPart.forEach(function (j) { if (statusOf[j.id]) j.status = statusOf[j.id]; });
+    JOBS.length = 0;
+    boardPart.forEach(function (j) { JOBS.push(j); });
+    rest.forEach(function (j) { JOBS.push(j); });
+  }
+
+  function quickNext(id) {
+    if (!canEdit || pendingNext[id]) return;
+    var j = null;
+    for (var i = 0; i < JOBS.length; i++) { if (JOBS[i].id === id) { j = JOBS[i]; break; } }
+    if (!j) return;
+    var ns = NEXT[j.status]; if (!ns) return;
+    pendingNext[id] = true;
+    var prev = j.status;
+    // 乐观更新：本地立即改状态并同步重渲染，使卡片立刻离开当前列、下一张补上来。
+    // 关键修复：此前不立即重渲染，旧 DOM 上同一按钮会被连续点击，导致同一文件被连续 next，
+    // 且多次并发 refresh 用旧 server 数据覆盖本地 JOBS，造成文件丢失/乱跳。
+    j.status = ns;
+    if (ns === '打印中' && !j.machine) j.machine = firstFreeMachine(JOBS);
+    if (searchTerm) renderBoard(JOBS); else moveJobCard(id, ns);  // 搜索态整块重建，否则精准移动
+    renderStats(JOBS); renderArchive(JOBS);
+    updateJob(j).then(function () {
+      delete pendingNext[id];
+    }).catch(function () {
+      delete pendingNext[id];
+      j.status = prev;            // 持久化失败则回滚本地状态
+      renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+      toast('操作失败，已回滚', 'err');
+    });
+  }
+
+  // ---------- 机器状态自动轮询（每 10 秒） ----------
+  var POLL_MS = 5000;
+  var STALE_MIN = 40;
+  function minsSince(iso) {
+    if (!iso) return 9999;
+    var t = Date.parse(iso);
+    if (isNaN(t)) return 9999;
+    return (Date.now() - t) / 60000;
+  }
+  function pollMachines() {
+    api('/api/machines').then(function (pmap) {
+      PMAP = pmap || {};
+      renderMachines(JOBS, PMAP);
+      var ls = el('lastSync'), dot = el('rtDot');
+      var keys = Object.keys(pmap || {});
+      var allStale = keys.length > 0 && keys.every(function (k) { return minsSince(pmap[k].updated) > STALE_MIN; });
+      if (allStale) {
+        if (ls) ls.textContent = '数据可能已过期(>40 分钟未更新)';
+        if (dot) dot.classList.add('stale');
+      } else {
+        var d = new Date();
+        var t = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        if (ls) ls.textContent = '更新于 ' + t;
+        if (dot) dot.classList.remove('stale');
+      }
+      setSync('已同步 · 本地', 'ok');
+    }).catch(function (e) {
+      console.error('机器状态轮询失败', e);
+      var dot = el('rtDot'); if (dot) dot.classList.add('stale');
+    });
+  }
+
+  // ---------- editor ----------
+  function cacheForm() {
+    try {
+      localStorage.setItem(FORM_KEY, JSON.stringify({
+        name: el('fName').value, qty: el('fQty').value, note: el('fNote').value
+      }));
+    } catch (e) {}
+  }
+  function restoreForm() {
+    try {
+      var c = JSON.parse(localStorage.getItem(FORM_KEY) || '{}');
+      if (c.name) el('fName').value = c.name;
+      if (c.qty) el('fQty').value = c.qty;
+      if (c.note) el('fNote').value = c.note;
+    } catch (e) {}
+  }
+  function fillSelect(sel, opts, val) {
+    sel.innerHTML = '';
+    opts.forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = o || ''; op.textContent = o || '（未指定）';
+      if (o === val) op.selected = true;
+      sel.appendChild(op);
+    });
+  }
+  function openEditor(id) {
+    editingId = id || null;
+    var j = null;
+    if (id) { for (var i = 0; i < JOBS.length; i++) { if (JOBS[i].id === id) { j = JOBS[i]; break; } } }
+    el('modalTitle').textContent = j ? '编辑文件' : '添加打印文件';
+    el('fName').value = j ? j.name : '';
+    el('fQty').value = j ? (j.qty || '') : '';
+    el('fNote').value = j ? (j.note || '') : '';
+    fillSelect(el('fStatus'), STATUSES, j ? j.status : '待打印');
+    fillSelect(el('fMachine'), [''].concat(MACHINES), j ? j.machine : '');
+    el('delBtn').style.display = j ? 'inline-block' : 'none';
+    // 添加模式：提示支持批量（每行一个文件名）；编辑模式：单行
+    var hint = el('fNameHint');
+    if (j) {
+      hint.textContent = '编辑单条记录。';
+      el('fName').setAttribute('rows', '1');
+    } else {
+      hint.innerHTML = '支持<b>批量添加</b>：每行一个文件名，换行分割，将分别创建多条记录（共用下方状态/机器/数量/备注）。';
+      el('fName').setAttribute('rows', '4');
+    }
+    if (!j) restoreForm();
+    el('saveBtn').style.display = canEdit ? '' : 'none';
+    el('delBtn').style.display = (canEdit && j) ? 'inline-block' : 'none';
+    el('modal').classList.add('show');
+    setTimeout(function () { el('fName').focus(); }, 50);
+  }
+  function closeEditor() { el('modal').classList.remove('show'); editingId = null; }
+  function saveEditor() {
+    var raw = el('fName').value;
+    var status = el('fStatus').value || '待打印';
+    var machine = el('fMachine').value || '';
+    var qty = el('fQty').value || 0;
+    var note = el('fNote').value.trim();
+    var p = el('saveBtn');
+
+    if (editingId) {
+      // 编辑模式：单条保存
+      var name = raw.trim();
+      if (!name) { toast('请填写文件名称', 'err'); el('fName').focus(); return; }
+      var job = { name: name, status: status, machine: machine, qty: qty, note: note, addedAt: '' };
+      p.disabled = true; p.textContent = '保存中…';
+      var op = updateJob((job.id = editingId, job));
+      op.then(function () { try { localStorage.removeItem(FORM_KEY); } catch (e) {} closeEditor(); refresh(); toast('已保存', 'ok'); })
+        .catch(function () { toast('保存失败', 'err'); })
+        .finally(function () { p.disabled = false; p.textContent = '保存'; });
+      return;
+    }
+
+    // 添加模式：按行拆分批量创建（每行一个文件名）
+    var names = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+    if (names.length === 0) { toast('请填写至少一个文件名称', 'err'); el('fName').focus(); return; }
+    if (names.length > 1) {
+      if (!confirm('将批量添加 ' + names.length + ' 个文件记录（共用当前状态/机器/数量/备注），确认？')) return;
+    }
+    p.disabled = true; p.textContent = '保存中… (' + names.length + ')';
+    var tasks = names.map(function (n) {
+      return addJob({ name: n, status: status, machine: machine, qty: qty, note: note, addedAt: '' });
+    });
+    Promise.all(tasks).then(function () {
+      try { localStorage.removeItem(FORM_KEY); } catch (e) {}
+      closeEditor(); refresh();
+      toast(names.length > 1 ? ('已批量添加 ' + names.length + ' 个文件') : '已保存', 'ok');
+    }).catch(function () { toast('保存失败（部分可能未写入）', 'err'); })
+      .finally(function () { p.disabled = false; p.textContent = '保存'; });
+  }
+  function delEditor() {
+    if (!editingId) return;
+    if (!confirm('确定删除这个文件记录吗？此操作不可恢复。')) return;
+    deleteJob(editingId).then(function () { closeEditor(); refresh(); toast('已删除', 'ok'); })
+      .catch(function () { toast('删除失败', 'err'); });
+  }
+
+  // ---------- backup ----------
+  function onClear() {
+    if (!confirm('确定清空全部数据吗？此操作不可恢复。')) return;
+    clearAll().then(function () { refresh(); toast('已清空', 'ok'); }).catch(function () { toast('清空失败', 'err'); });
+  }
+  function onExport() {
+    loadJobs().then(function (jobs) {
+      var blob = new Blob([JSON.stringify(jobs, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = '3dprint-backup-' + todayISO() + '.json'; a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      toast('已导出备份', 'ok');
+    });
+  }
+  function onImportFile(e) {
+    var file = e.target.files[0]; if (!file) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        var arr = JSON.parse(rd.result);
+        if (!Array.isArray(arr)) throw 0;
+        var chain = Promise.resolve();
+        arr.forEach(function (j) {
+          if (!j.id) j.id = 'j' + Date.now() + Math.random();
+          chain = chain.then(function () { return api('/api/jobs', { method: 'POST', body: JSON.stringify(j) }); });
+        });
+        chain.then(function () { refresh(); toast('已导入 ' + arr.length + ' 条', 'ok'); })
+             .catch(function () { toast('导入失败', 'err'); });
+      } catch (err) { toast('导入失败：文件格式错误', 'err'); }
+    };
+    rd.readAsText(file);
+    e.target.value = '';
+  }
+
+  function toast(msg, type) {
+    var t = el('toast');
+    if (!t) return;
+    t.textContent = msg; t.className = 'toast show ' + (type || '');
+    clearTimeout(t._t); t._t = setTimeout(function () { t.className = 'toast'; }, 2200);
+  }
+
+  // ---------- init ----------
+  function init() {
+    el('addBtn').addEventListener('click', function () { openEditor(null); });
+    ['fName', 'fQty', 'fNote'].forEach(function (id) { el(id).addEventListener('input', cacheForm); });
+    el('fStatus').addEventListener('change', cacheForm);
+    el('fMachine').addEventListener('change', cacheForm);
+    el('saveBtn').addEventListener('click', saveEditor);
+    el('delBtn').addEventListener('click', delEditor);
+    el('cancelBtn').addEventListener('click', closeEditor);
+    el('clearBtn').addEventListener('click', onClear);
+    el('exportBtn').addEventListener('click', onExport);
+    el('importBtn').addEventListener('click', function () { el('importFile').click(); });
+    el('importFile').addEventListener('change', onImportFile);
+    el('searchInput').addEventListener('blur', function () { applySearch(this.value); });
+    el('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); applySearch(this.value); } });
+    el('searchClear').addEventListener('click', function () { el('searchInput').value = ''; applySearch(''); el('searchInput').focus(); });
+    el('modal').addEventListener('click', function (e) { if (e.target === el('modal')) closeEditor(); });
+    refresh();
+    setInterval(pollMachines, POLL_MS);
+  }
+
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>

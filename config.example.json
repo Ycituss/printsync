@@ -1,0 +1,15 @@
+{
+  "host": "0.0.0.0",
+  "port": 8000,
+  "webhook_url": "",
+  "allowed_ips": ["192.168.1.26"],
+  "machines": [
+    {
+      "name": "机器1",
+      "label": "01",
+      "ip": "REPLACE_WITH_LAN_IP",
+      "serial": "REPLACE_WITH_SERIAL",
+      "access_code": "REPLACE_WITH_ACCESS_CODE"
+    }
+  ]
+}
