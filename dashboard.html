@@ -155,6 +155,40 @@
     .sidebar { grid-template-columns:1fr; }
     .wrap { padding:12px; }
   }
+  /* 回滚提示弹窗：必须手动点击「我知道了」才能关闭 */
+  .rb-mask { position:fixed; inset:0; background:rgba(20,30,50,.55); display:none; align-items:center; justify-content:center; z-index:200; }
+  .rb-mask.show { display:flex; }
+  .rb-box { background:#fff; width:min(480px,92vw); max-height:82vh; overflow:auto; border-radius:12px; padding:20px 22px; box-shadow:0 12px 40px rgba(0,0,0,.35); }
+  .rb-title { margin:0 0 4px; font-size:16px; font-weight:700; color:#cf1322; }
+  .rb-sub { margin:0 0 14px; font-size:12px; color:#888; line-height:1.5; }
+  .rb-list { margin:0 0 18px; padding:0; list-style:none; }
+  .rb-list li { padding:9px 12px; margin:8px 0; background:#fff1f0; border:1px solid #ffccc7; border-radius:8px; font-size:13px; line-height:1.55; color:#333; word-break:break-all; }
+  .rb-list li b { color:#ad2102; margin-right:2px; }
+  .rb-actions { text-align:right; }
+
+  /* ---------- 数据快照弹窗 ---------- */
+  .btn.block { width:100%; }
+  .backup-section { padding:14px; }
+  .bk-modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:60; padding:24px; }
+  .bk-modal.show { display:flex; }
+  .bk-sheet { width:min(1120px,96vw); height:min(82vh,780px); background:#fff; border-radius:12px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,.3); }
+  .bk-head { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid #ececec; }
+  .bk-title { font-size:16px; font-weight:700; color:#1f1f1f; }
+  .bk-body { flex:1; display:flex; min-height:0; }
+  .bk-list { width:288px; border-right:1px solid #ececec; overflow-y:auto; padding:10px; min-height:0; }
+  .bk-item { padding:10px 12px; border:1px solid #e3e3e3; border-radius:8px; margin-bottom:8px; cursor:pointer; background:#fff; transition:border-color .15s; }
+  .bk-item:hover { border-color:#5B8FF9; }
+  .bk-item.active { border-color:#5B8FF9; background:#eef4ff; }
+  .bk-item .bk-name { font-weight:600; color:#1f1f1f; }
+  .bk-item .bk-time { font-size:12px; color:#888; margin-top:3px; }
+  .bk-item .bk-stat { font-size:12px; color:#555; margin-top:5px; line-height:1.5; word-break:break-all; }
+  .bk-item .bk-empty { font-size:12px; color:#bbb; font-style:italic; }
+  .bk-preview { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .bk-preview-head { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #ececec; }
+  #bkPreviewTitle { font-size:14px; font-weight:600; color:#1f1f1f; }
+  #backupPreview { flex:1; overflow:auto; padding:12px; }
+  .bk-foot { padding:10px 16px; border-top:1px solid #ececec; }
+  .bk-hint { font-size:12px; color:#888; }
 </style>
 </head>
 <body>
@@ -219,6 +253,14 @@
         </div>
         <div id="archiveList" class="archive-list"></div>
       </div>
+
+      <div class="section backup-section">
+        <div class="sec-head">
+          <span class="sec-title">数据快照</span>
+          <span class="pill"><b id="backupCount">0</b></span>
+        </div>
+        <button id="openBackups" class="btn ghost block">查看 / 恢复快照</button>
+      </div>
     </aside>
   </div>
 </div>
@@ -256,6 +298,14 @@
 </div>
 <input id="importFile" type="file" accept="application/json" class="hidden">
 <div id="toast" class="toast"></div>
+<div id="rbModal" class="rb-mask">
+  <div class="rb-box">
+    <h3 class="rb-title">⚠️ 操作失败，以下更改已回滚</h3>
+    <p class="rb-sub">网络或服务器异常，更改未能保存。请在网络恢复后重试。</p>
+    <ul id="rbList" class="rb-list"></ul>
+    <div class="rb-actions"><button id="rbClose" class="btn">我知道了</button></div>
+  </div>
+</div>
 
 <div id="machineModal" class="modal" onclick="if(event.target===this)hideMachineModal()">
   <div class="sheet">
@@ -263,6 +313,28 @@
     <div class="mm-body"></div>
     <div class="sheet-actions">
       <button class="btn ghost" onclick="hideMachineModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="backupModal" class="bk-modal">
+  <div class="bk-sheet">
+    <div class="bk-head">
+      <span class="bk-title">数据快照（自动备份）</span>
+      <button id="bkClose" class="btn ghost">关闭</button>
+    </div>
+    <div class="bk-body">
+      <div class="bk-list" id="bkList"></div>
+      <div class="bk-preview">
+        <div class="bk-preview-head">
+          <span id="bkPreviewTitle">预览</span>
+          <button id="bkRestore" class="btn primary" disabled>恢复此快照</button>
+        </div>
+        <div id="backupPreview" class="board"></div>
+      </div>
+    </div>
+    <div class="bk-foot">
+      <span id="bkHint" class="bk-hint"></span>
     </div>
   </div>
 </div>
@@ -524,18 +596,39 @@
       if (!dragging) return;
       var newStatus = colStatus;
       var id = dragging.dataset.id;
-      // 跨列：更新该 job 状态（本地同步）
-      if (dragging.dataset.status !== newStatus) {
-        dragging.dataset.status = newStatus;
-        dragging.style.borderLeftColor = COLORS[newStatus] || '#8C8C8C';
-        for (var k = 0; k < JOBS.length; k++) { if (JOBS[k].id === id) { JOBS[k].status = newStatus; break; } }
+      var job = null;
+      for (var k = 0; k < JOBS.length; k++) { if (JOBS[k].id === id) { job = JOBS[k]; break; } }
+      if (!job) return;
+      var prevStatus = job.status;
+      // 同列拖动：仅顺序变化，无状态回滚需求
+      if (prevStatus === newStatus) {
+        syncBoardOrderFromDom();
+        renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+        persistOrder().catch(function () {
+          showRollbackModal([{ name: job.name || ('#' + id), desc: '排序顺序未能保存到服务器' }]);
+        });
+        return;
       }
-      // 关键：把拖拽后的 DOM 顺序与状态同步回 JOBS，再整块重建，
-      // 否则右上角计数与卡片内状态标识不会刷新（此前只移动了 DOM 节点）。
+      // 跨列：先拍快照（拖前完整状态+顺序），再乐观更新
+      var beforeJOBS = JOBS.map(function (x) { return Object.assign({}, x); });
+      job.status = newStatus;
       syncBoardOrderFromDom();
       renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
-      updateJobStatus(id, newStatus);
-      persistOrder();
+      // 状态与顺序两个请求都发出；用 fulfilled 包装以等待两者结束再统一判断
+      Promise.all([
+        updateJobStatus(id, newStatus).then(function () { return 'ok'; }).catch(function () { return 'fail'; }),
+        persistOrder().then(function () { return 'ok'; }).catch(function () { return 'fail'; })
+      ]).then(function (res) {
+        if (res[0] === 'fail') {
+          // 状态提交失败：还原到拖前（状态 + 顺序）
+          JOBS = beforeJOBS.map(function (x) { return Object.assign({}, x); });
+          renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+          showRollbackModal([{ name: job.name || ('#' + id), desc: '拖到「' + newStatus + '」已撤销，已还原到「' + prevStatus + '」' }]);
+        } else if (res[1] === 'fail') {
+          // 仅顺序失败：状态已提交，提示顺序未保存（不回滚状态）
+          showRollbackModal([{ name: job.name || ('#' + id), desc: '已移动到「' + newStatus + '」，但排序顺序未能保存到服务器' }]);
+        }
+      });
     });
   }
 
@@ -578,14 +671,13 @@
     boardIds.forEach(function (id) { inBoard[id] = true; });
     var allIds = boardIds.slice();
     JOBS.forEach(function (j) { if (!inBoard[j.id]) allIds.push(j.id); });
-    api('/api/jobs/reorder', { method: 'POST', body: JSON.stringify({ ordered_ids: allIds }) })
-      .then(function () { /* 顺序已保存 */ })
-      .catch(function () { toast('排序保存失败', 'err'); });
+    // 返回 promise，失败由调用方（拖拽 drop）统一回滚处理
+    return api('/api/jobs/reorder', { method: 'POST', body: JSON.stringify({ ordered_ids: allIds }) });
   }
 
   function updateJobStatus(id, status) {
-    api('/api/jobs/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ status: status }) })
-      .catch(function () { toast('状态更新失败', 'err'); });
+    // 返回 promise，失败由调用方（拖拽 drop）统一回滚处理
+    return api('/api/jobs/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ status: status }) });
   }
 
   function renderMachines(jobs, pmap) {
@@ -868,7 +960,7 @@
       delete pendingNext[id];
       j.status = prev;            // 持久化失败则回滚本地状态
       renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
-      toast('操作失败，已回滚', 'err');
+      showRollbackModal([{ name: j.name || ('#' + id), desc: '状态「' + ns + '」→「' + prev + '」已撤销' }]);
     });
   }
 
@@ -972,7 +1064,7 @@
       p.disabled = true; p.textContent = '保存中…';
       var op = updateJob((job.id = editingId, job));
       op.then(function () { try { localStorage.removeItem(FORM_KEY); } catch (e) {} closeEditor(); refresh(); toast('已保存', 'ok'); })
-        .catch(function () { toast('保存失败', 'err'); })
+        .catch(function () { closeEditor(); showRollbackModal([{ name: name, desc: '编辑内容未能保存到服务器' }]); })
         .finally(function () { p.disabled = false; p.textContent = '保存'; });
       return;
     }
@@ -991,20 +1083,24 @@
       try { localStorage.removeItem(FORM_KEY); } catch (e) {}
       closeEditor(); refresh();
       toast(names.length > 1 ? ('已批量添加 ' + names.length + ' 个文件') : '已保存', 'ok');
-    }).catch(function () { toast('保存失败（部分可能未写入）', 'err'); })
+    }).catch(function () { closeEditor(); showRollbackModal([{ name: names.length + ' 个文件', desc: '批量添加未能保存到服务器' }]); })
       .finally(function () { p.disabled = false; p.textContent = '保存'; });
   }
   function delEditor() {
     if (!editingId) return;
     if (!confirm('确定删除这个文件记录吗？此操作不可恢复。')) return;
+    var j = null;
+    for (var i = 0; i < JOBS.length; i++) { if (JOBS[i].id === editingId) { j = JOBS[i]; break; } }
+    var nm = j ? (j.name || ('#' + editingId)) : ('#' + editingId);
     deleteJob(editingId).then(function () { closeEditor(); refresh(); toast('已删除', 'ok'); })
-      .catch(function () { toast('删除失败', 'err'); });
+      .catch(function () { closeEditor(); showRollbackModal([{ name: nm, desc: '删除未成功，记录仍保留在服务器' }]); });
   }
 
   // ---------- backup ----------
   function onClear() {
     if (!confirm('确定清空全部数据吗？此操作不可恢复。')) return;
-    clearAll().then(function () { refresh(); toast('已清空', 'ok'); }).catch(function () { toast('清空失败', 'err'); });
+    clearAll().then(function () { refresh(); toast('已清空', 'ok'); })
+      .catch(function () { showRollbackModal([{ name: '全部数据', desc: '清空未成功，现有记录仍保留' }]); });
   }
   function onExport() {
     loadJobs().then(function (jobs) {
@@ -1028,8 +1124,8 @@
           chain = chain.then(function () { return api('/api/jobs', { method: 'POST', body: JSON.stringify(j) }); });
         });
         chain.then(function () { refresh(); toast('已导入 ' + arr.length + ' 条', 'ok'); })
-             .catch(function () { toast('导入失败', 'err'); });
-      } catch (err) { toast('导入失败：文件格式错误', 'err'); }
+             .catch(function () { showRollbackModal([{ name: arr.length + ' 条', desc: '导入未能完成，部分或全部未写入服务器' }]); });
+      } catch (err) { showRollbackModal([{ name: '导入文件', desc: '文件格式错误，未能解析，未发起导入' }]); }
     };
     rd.readAsText(file);
     e.target.value = '';
@@ -1042,6 +1138,173 @@
     clearTimeout(t._t); t._t = setTimeout(function () { t.className = 'toast'; }, 2200);
   }
 
+  // 回滚提示弹窗：必须手动点击「我知道了」才能关闭，明确列出回滚了哪些更改。
+  // 用 textContent 拼接，避免文件名中的特殊字符造成 XSS。
+  function showRollbackModal(items) {
+    var ul = el('rbList'); if (!ul) return;
+    ul.innerHTML = '';
+    (items || []).forEach(function (it) {
+      var li = document.createElement('li');
+      var b = document.createElement('b'); b.textContent = (it.name == null || it.name === '') ? '(未命名)' : String(it.name);
+      li.appendChild(b);
+      li.appendChild(document.createTextNode('：' + (it.desc || '')));
+      ul.appendChild(li);
+    });
+    var m = el('rbModal'); if (m) m.classList.add('show');
+  }
+  function closeRollbackModal() { var m = el('rbModal'); if (m) m.classList.remove('show'); }
+
+  // ---------- 数据快照（自动备份）列表 / 预览 / 恢复 ----------
+  var backupList = [];      // 最近一次拉取的快照元数据
+  var selectedBackup = null; // 当前选中的快照 name
+
+  function refreshBackups() {
+    api('/api/backups').then(function (list) {
+      backupList = Array.isArray(list) ? list : [];
+      var c = el('backupCount'); if (c) c.textContent = backupList.length;
+    }).catch(function () { var c = el('backupCount'); if (c) c.textContent = '0'; });
+  }
+
+  function openBackups() {
+    var m = el('backupModal'); if (!m) return;
+    selectedBackup = null;
+    renderBackupList();
+    clearBackupPreview();
+    var r = el('bkRestore'); if (r) r.disabled = true;
+    var h = el('bkHint'); if (h) h.textContent = canEdit
+      ? '点击左侧快照查看预览，确认无误后点击「恢复此快照」（恢复前当前数据会被自动轮转为新的快照）。'
+      : '当前为只读模式（IP 不在白名单），无法恢复快照。';
+    m.classList.add('show');
+  }
+  function closeBackups() { var m = el('backupModal'); if (m) m.classList.remove('show'); }
+
+  function renderBackupList() {
+    var box = el('bkList'); if (!box) return;
+    box.innerHTML = '';
+    if (!backupList.length) {
+      var e = document.createElement('div'); e.className = 'bk-item bk-empty';
+      e.textContent = '暂无快照（每次保存数据会自动生成）';
+      box.appendChild(e);
+      return;
+    }
+    backupList.forEach(function (meta) {
+      var item = document.createElement('div');
+      item.className = 'bk-item' + (selectedBackup === meta.name ? ' active' : '');
+      item.addEventListener('click', function () { selectSnapshot(meta.name); });
+      var nm = document.createElement('div'); nm.className = 'bk-name'; nm.textContent = meta.name;
+      var tm = document.createElement('div'); tm.className = 'bk-time';
+      tm.textContent = (meta.mtime || '') + (meta.size != null ? (' · ' + fmtSize(meta.size)) : '');
+      var st = document.createElement('div'); st.className = 'bk-stat';
+      st.textContent = '共 ' + (meta.count == null ? '?' : meta.count) + ' 条'
+        + (meta.corrupt ? ' · ⚠️文件损坏' : '') + statLine(meta.byStatus);
+      item.appendChild(nm); item.appendChild(tm); item.appendChild(st);
+      box.appendChild(item);
+    });
+  }
+
+  function statLine(byStatus) {
+    if (!byStatus) return '';
+    var parts = [];
+    for (var k in byStatus) { if (byStatus.hasOwnProperty(k)) parts.push(k + ' ' + byStatus[k]); }
+    return parts.length ? ' ｜ ' + parts.join(' · ') : '';
+  }
+
+  function fmtSize(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  function selectSnapshot(name) {
+    selectedBackup = name;
+    renderBackupList();
+    var r = el('bkRestore'); if (r) r.disabled = !canEdit;
+    var meta = null;
+    for (var i = 0; i < backupList.length; i++) { if (backupList[i].name === name) { meta = backupList[i]; break; } }
+    var title = el('bkPreviewTitle');
+    if (title) title.textContent = (meta ? meta.name + ' · ' + (meta.mtime || '') : '预览');
+    // 拉取该快照的完整数据用于预览
+    api('/api/backups/' + encodeURIComponent(name)).then(function (d) {
+      if (selectedBackup !== name) return; // 用户已切换到别的快照
+      renderPreview(d.jobs || [], el('backupPreview'));
+    }).catch(function () {
+      if (selectedBackup !== name) return;
+      var pv = el('backupPreview'); if (pv) pv.innerHTML = '<div class="col-empty">预览加载失败</div>';
+    });
+  }
+
+  function clearBackupPreview() {
+    var pv = el('backupPreview'); if (pv) pv.innerHTML = '';
+    var t = el('bkPreviewTitle'); if (t) t.textContent = '预览';
+  }
+
+  // 只读看板预览：复用 card() 渲染，移除操作按钮，保持与主界面一致的视觉
+  function renderPreview(jobs, container) {
+    if (!container) return;
+    container.innerHTML = '';
+    BOARD_ORDER.forEach(function (st) {
+      var col = document.createElement('div'); col.className = 'col';
+      col.style.height = (COL_HEIGHT[st] || 300) + 'px';
+      var head = document.createElement('div'); head.className = 'col-head';
+      head.style.borderTopColor = COLORS[st] || '#8C8C8C';
+      head.innerHTML = '<span class="col-title">' + esc(st) + '</span><span class="col-count">' + jobs.filter(function (j) { return j.status === st; }).length + '</span>';
+      var body = document.createElement('div'); body.className = 'col-body';
+      var list = jobs.filter(function (j) { return j.status === st; });
+      if (!list.length) {
+        var em = document.createElement('div'); em.className = 'col-empty'; em.textContent = '暂无任务'; body.appendChild(em);
+      } else {
+        list.forEach(function (j) {
+          // 预览只读：用克隆节点彻底剥离 card() 上的 next/编辑/拖拽事件监听，
+          // 避免点快照卡片误改实时 JOBS 数据。
+          var c = card(j);
+          var ro = c.cloneNode(true);
+          ro.draggable = false;
+          ro.classList.remove('dragging');
+          ro.querySelectorAll('.c-actions').forEach(function (a) { a.remove(); });
+          body.appendChild(ro);
+        });
+      }
+      col.appendChild(head); col.appendChild(body);
+      container.appendChild(col);
+    });
+    // 归档项（与主页面侧栏一致，单独区块展示）
+    var arc = jobs.filter(function (j) { return j.status === '归档'; });
+    if (arc.length) {
+      var sec = document.createElement('div'); sec.className = 'archive-section';
+      var title = document.createElement('div');
+      title.style.cssText = 'font-weight:600;color:#13C2C2;margin-bottom:8px;';
+      title.textContent = '归档 (' + arc.length + ')';
+      var al = document.createElement('div'); al.className = 'archive-list';
+      arc.forEach(function (j) {
+        var it = document.createElement('div'); it.className = 'arc-item';
+        var nm = document.createElement('span'); nm.className = 'arc-name'; nm.textContent = j.name || '(未命名)';
+        var mc = document.createElement('span'); mc.className = 'arc-machine'; mc.textContent = j.machine || '未分配';
+        it.appendChild(nm); it.appendChild(mc);
+        al.appendChild(it);
+      });
+      sec.appendChild(title); sec.appendChild(al);
+      container.appendChild(sec);
+    }
+  }
+
+  function restoreBackup() {
+    if (!selectedBackup) return;
+    if (!canEdit) { showRollbackModal([{ name: '恢复快照', desc: '当前为只读模式，无法恢复（仅白名单 IP 可操作）' }]); return; }
+    if (!confirm('确定将「' + selectedBackup + '」恢复为当前数据吗？\n恢复前当前数据会被自动轮转为新的快照，可再次恢复回去。')) return;
+    var btn = el('bkRestore'); if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
+    api('/api/backups/restore', { method: 'POST', body: JSON.stringify({ name: selectedBackup }) })
+      .then(function (d) {
+        if (d && Array.isArray(d.jobs)) JOBS = d.jobs;
+        renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+        refreshBackups();
+        closeBackups();
+        toast('已恢复快照 ' + (d && d.restored || selectedBackup), 'ok');
+      })
+      .catch(function () { showRollbackModal([{ name: selectedBackup, desc: '恢复失败：网络或服务器异常，数据未改动' }]); })
+      .finally(function () { var b = el('bkRestore'); if (b) { b.disabled = !canEdit; b.textContent = '恢复此快照'; } });
+  }
+
   // ---------- init ----------
   function init() {
     el('addBtn').addEventListener('click', function () { openEditor(null); });
@@ -1050,6 +1313,7 @@
     el('fMachine').addEventListener('change', cacheForm);
     el('saveBtn').addEventListener('click', saveEditor);
     el('delBtn').addEventListener('click', delEditor);
+    el('rbClose').addEventListener('click', closeRollbackModal);
     el('cancelBtn').addEventListener('click', closeEditor);
     el('clearBtn').addEventListener('click', onClear);
     el('exportBtn').addEventListener('click', onExport);
@@ -1059,7 +1323,12 @@
     el('searchInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); applySearch(this.value); } });
     el('searchClear').addEventListener('click', function () { el('searchInput').value = ''; applySearch(''); el('searchInput').focus(); });
     el('modal').addEventListener('click', function (e) { if (e.target === el('modal')) closeEditor(); });
+    el('openBackups').addEventListener('click', openBackups);
+    el('bkClose').addEventListener('click', closeBackups);
+    el('bkRestore').addEventListener('click', restoreBackup);
+    el('backupModal').addEventListener('click', function (e) { if (e.target === el('backupModal')) closeBackups(); });
     refresh();
+    refreshBackups();
     setInterval(pollMachines, POLL_MS);
   }
 

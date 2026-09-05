@@ -713,7 +713,7 @@ def load_jobs():
 
 
 # 写盘前保留的历史版本数量（防止误删/覆盖导致永久丢失，可一键回退）
-BACKUP_KEEP = 3
+BACKUP_KEEP = 5
 
 
 def save_jobs():
@@ -733,6 +733,69 @@ def save_jobs():
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(jobs, f, ensure_ascii=False, indent=2)
     os.replace(tmp, FILES_PATH)
+
+
+def list_backups():
+    """列出 data 目录下的历史快照 files.json.bak1~bakN，返回元数据（仅读文件数/状态分布，不全量载入）。"""
+    from collections import Counter
+    out = []
+    for i in range(1, BACKUP_KEEP + 1):
+        p = FILES_PATH.with_name("files.json.bak%d" % i)
+        if not p.exists():
+            continue
+        try:
+            st = p.stat()
+            meta = {
+                "name": p.name,
+                "index": i,
+                "mtime": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                "size": st.st_size,
+            }
+            try:
+                with p.open(encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    meta["count"] = len(data)
+                    meta["byStatus"] = dict(Counter(j.get("status") for j in data if isinstance(j, dict)))
+                else:
+                    meta["count"] = 0
+                    meta["byStatus"] = {}
+            except Exception:
+                meta["count"] = None
+                meta["byStatus"] = {}
+                meta["corrupt"] = True
+            out.append(meta)
+        except Exception:
+            continue
+    return out
+
+
+def restore_backup(name):
+    """将指定历史快照恢复为当前 files.json。
+
+    恢复前 save_jobs() 会先把当前的 files.json 轮转进备份体系（保护现场），
+    再把快照内容原子写回，因此「被恢复的旧主数据」不会丢失，而是成为新的 bak1。
+    """
+    if not isinstance(name, str) or not re.match(r"^files\.json\.bak[1-9]$", name):
+        return None
+    idx = int(name.rsplit(".bak", 1)[1])
+    if idx < 1 or idx > BACKUP_KEEP:
+        return None
+    src = FILES_PATH.with_name(name)
+    if not src.exists():
+        return None
+    try:
+        with src.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return None
+    except Exception:
+        return None
+    with jobs_lock:
+        global jobs
+        jobs = data
+        save_jobs()  # 内部先轮转旧主数据到 bak1，再原子写回快照内容
+    return list(jobs)
 
 
 def reorder_jobs(ordered_ids):
@@ -1164,6 +1227,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({k: dict(v) for k, v in machine_state.items()})
         if path == "/api/ping":
             return self._json({"ok": True})
+        if path == "/api/backups":
+            return self._json(list_backups())
+        m = re.match(r"^/api/backups/([^/]+)$", path)
+        if m:
+            name = urllib.parse.unquote(m.group(1))
+            if not re.match(r"^files\.json\.bak[1-9]$", name):
+                return self._json({"error": "not found"}, 404)
+            p = FILES_PATH.with_name(name)
+            if not p.exists():
+                return self._json({"error": "not found"}, 404)
+            try:
+                with p.open(encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    return self._json({"error": "corrupt backup"}, 500)
+                return self._json({"name": name, "jobs": data})
+            except Exception as e:
+                return self._json({"error": "corrupt backup: %s" % e}, 500)
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -1184,6 +1265,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/jobs/reorder":
             ok = reorder_jobs(body.get("ordered_ids") or [])
             return self._json({"ok": True}, 200) if ok else self._json({"error": "invalid order"}, 400)
+        if path == "/api/backups/restore":
+            name = body.get("name")
+            jobs_after = restore_backup(name)
+            if jobs_after is None:
+                return self._json({"error": "invalid or missing backup name"}, 400)
+            return self._json({"ok": True, "jobs": jobs_after, "restored": name}, 200)
         self._json({"error": "not found"}, 404)
 
     def do_PUT(self):
