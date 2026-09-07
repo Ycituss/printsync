@@ -187,6 +187,24 @@
   .bk-preview-head { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #ececec; }
   #bkPreviewTitle { font-size:14px; font-weight:600; color:#1f1f1f; }
   #backupPreview { flex:1; overflow:auto; padding:12px; }
+  .bk-diff { border-bottom:1px solid #1f2a37; padding:10px 12px; background:#0e1620; }
+  .bk-diff:empty { display:none; }
+  .diff-summary { font-size:13px; margin-bottom:6px; }
+  .diff-title { color:#c9d4e0; }
+  .diff-none { color:#52C41A; }
+  .diff-list { display:flex; flex-direction:column; gap:6px; max-height:240px; overflow:auto; }
+  .diff-row { display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 8px; border-radius:6px; border-left:3px solid #555; }
+  .diff-row-wrap { display:flex; flex-direction:column; gap:2px; margin-bottom:2px; }
+  .diff-tag { font-weight:700; padding:1px 6px; border-radius:4px; font-size:12px; }
+  .diff-add { border-left-color:#52C41A; background:rgba(82,196,26,.08); }
+  .diff-add .diff-tag { color:#52C41A; }
+  .diff-del { border-left-color:#FF4D4F; background:rgba(255,77,79,.08); }
+  .diff-del .diff-tag { color:#FF4D4F; }
+  .diff-chg { border-left-color:#FA8C16; background:rgba(250,140,22,.08); }
+  .diff-chg .diff-tag { color:#FA8C16; }
+  .diff-name { font-weight:600; color:#e6edf5; }
+  .diff-desc { color:#9aa7b5; font-size:12px; }
+  .diff-detail { font-size:12px; color:#c9d4e0; padding:2px 8px 4px 8px; margin-left:3px; border-left:3px solid #2a3645; }
   .bk-foot { padding:10px 16px; border-top:1px solid #ececec; }
   .bk-hint { font-size:12px; color:#888; }
 </style>
@@ -330,6 +348,7 @@
           <span id="bkPreviewTitle">预览</span>
           <button id="bkRestore" class="btn primary" disabled>恢复此快照</button>
         </div>
+        <div id="backupDiff" class="bk-diff"></div>
         <div id="backupPreview" class="board"></div>
       </div>
     </div>
@@ -1228,15 +1247,18 @@
     api('/api/backups/' + encodeURIComponent(name)).then(function (d) {
       if (selectedBackup !== name) return; // 用户已切换到别的快照
       renderPreview(d.jobs || [], el('backupPreview'));
+      renderDiff(d.jobs || [], JOBS);
     }).catch(function () {
       if (selectedBackup !== name) return;
       var pv = el('backupPreview'); if (pv) pv.innerHTML = '<div class="col-empty">预览加载失败</div>';
+      var dd = el('backupDiff'); if (dd) dd.innerHTML = '';
     });
   }
 
   function clearBackupPreview() {
     var pv = el('backupPreview'); if (pv) pv.innerHTML = '';
     var t = el('bkPreviewTitle'); if (t) t.textContent = '预览';
+    var dd = el('backupDiff'); if (dd) dd.innerHTML = '';
   }
 
   // 只读看板预览：复用 card() 渲染，移除操作按钮，保持与主界面一致的视觉
@@ -1286,6 +1308,86 @@
       sec.appendChild(title); sec.appendChild(al);
       container.appendChild(sec);
     }
+  }
+
+  // 快照 vs 当前版本的差异计算（纯数据，便于复用与单测）
+  var DIFF_FIELDS = [
+    { key: 'status', label: '状态' },
+    { key: 'machine', label: '机器' },
+    { key: 'name', label: '文件名' },
+    { key: 'qty', label: '数量' },
+    { key: 'note', label: '备注' }
+  ];
+
+  function computeDiff(snapJobs, curJobs) {
+    snapJobs = snapJobs || []; curJobs = curJobs || [];
+    var curMap = {}; curJobs.forEach(function (j) { curMap[j.id] = j; });
+    var added = [], removed = [], changed = [];
+    snapJobs.forEach(function (s) {
+      var c = curMap[s.id];
+      if (!c) { added.push(s); return; }
+      var diffs = [];
+      DIFF_FIELDS.forEach(function (f) {
+        var sv = (s[f.key] == null || s[f.key] === '') ? '' : String(s[f.key]);
+        var cv = (c[f.key] == null || c[f.key] === '') ? '' : String(c[f.key]);
+        if (sv !== cv) diffs.push({ field: f.label, from: cv, to: sv });
+      });
+      if (diffs.length) changed.push({ job: s, diffs: diffs });
+    });
+    curJobs.forEach(function (c) {
+      var found = false;
+      for (var i = 0; i < snapJobs.length; i++) { if (snapJobs[i].id === c.id) { found = true; break; } }
+      if (!found) removed.push(c);
+    });
+    return { added: added, removed: removed, changed: changed };
+  }
+
+  function diffRowEl(type, name, suffix, details) {
+    var row = document.createElement('div'); row.className = 'diff-row diff-' + type;
+    var tag = document.createElement('span'); tag.className = 'diff-tag';
+    tag.textContent = type === 'add' ? '新增' : type === 'del' ? '删除' : '修改';
+    var nm = document.createElement('span'); nm.className = 'diff-name'; nm.textContent = name || '';
+    var desc = document.createElement('span'); desc.className = 'diff-desc'; desc.textContent = suffix || '';
+    row.appendChild(tag); row.appendChild(nm); row.appendChild(desc);
+    if (!details) return row;
+    var dt = document.createElement('div'); dt.className = 'diff-detail'; dt.textContent = details;
+    var wrap = document.createElement('div'); wrap.className = 'diff-row-wrap';
+    wrap.appendChild(row); wrap.appendChild(dt);
+    return wrap;
+  }
+
+  // 在预览区顶部渲染「相较于当前版本的变化」
+  function renderDiff(snapJobs, curJobs) {
+    var box = el('backupDiff'); if (!box) return;
+    box.innerHTML = '';
+    var d = computeDiff(snapJobs, curJobs);
+    var total = d.added.length + d.removed.length + d.changed.length;
+    var summary = document.createElement('div'); summary.className = 'diff-summary';
+    var parts = [];
+    if (d.added.length) parts.push('<b style="color:#52C41A">新增 ' + d.added.length + '</b>');
+    if (d.removed.length) parts.push('<b style="color:#FF4D4F">删除 ' + d.removed.length + '</b>');
+    if (d.changed.length) parts.push('<b style="color:#FA8C16">修改 ' + d.changed.length + '</b>');
+    if (!total) {
+      summary.innerHTML = '<span class="diff-none">此快照与当前版本完全一致，恢复后无任何改动</span>';
+      box.appendChild(summary);
+      return;
+    }
+    summary.innerHTML = '<span class="diff-title">相较于当前版本的变化：</span>' + parts.join(' · ');
+    box.appendChild(summary);
+    var list = document.createElement('div'); list.className = 'diff-list';
+    d.added.forEach(function (j) {
+      list.appendChild(diffRowEl('add', j.name || ('#' + j.id), '恢复后会重新出现（当前版本已删除此记录）', null));
+    });
+    d.removed.forEach(function (j) {
+      list.appendChild(diffRowEl('del', j.name || ('#' + j.id), '恢复后会被移除（该记录为当前版本新增）', null));
+    });
+    d.changed.forEach(function (item) {
+      var details = item.diffs.map(function (x) {
+        return x.field + '：' + (x.from || '空') + ' → ' + (x.to || '空');
+      }).join('；');
+      list.appendChild(diffRowEl('chg', item.job.name || ('#' + item.job.id), '恢复后会改回快照中的值', details));
+    });
+    box.appendChild(list);
   }
 
   function restoreBackup() {
