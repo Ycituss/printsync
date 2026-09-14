@@ -36,6 +36,7 @@ import ssl
 import time
 import datetime
 import threading
+import uuid
 import socket
 import re
 import sys
@@ -869,7 +870,10 @@ def first_free_machine(joblist):
 
 
 def new_id():
-    return "j" + str(int(time.time() * 1000)) + str(int(time.time() % 1 * 1000))
+    # 全局唯一：旧实现用「毫秒时间戳 + 毫秒尾数」，在并发添加（前端 Promise.all 同毫秒
+    # 打来多个 POST）时会生成重复 id，导致多个文件共享同一 id（表现为详情相同、删除一起
+    # 消失、状态流转失控）。改用 uuid4 从根本上杜绝重复。
+    return "j" + uuid.uuid4().hex
 
 
 def create_job(body):
