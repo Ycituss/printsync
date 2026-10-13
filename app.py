@@ -415,6 +415,19 @@ VALID_STATUS = ["待打印", "打印中", "待摆盘填表", "需改进重打", 
 # 才信任"剩余<=10分钟"的读数。用于跳过刚下发/刚启动时报文的脏剩余时间(常被误报为1分钟)。
 REMIND_GRACE_MIN = 3
 
+# ---------------- 换料静默（企业微信推送） ----------------
+# 换料期间(外挂料盘换料丝 / AMS 换料 / 打印结束后的退料)打印机会连续上报一长串"提示型"错误：
+#   请将外挂料盘的料丝拉出… / 请将料丝插入进料口，直到料不断为止 / 换料失败…
+# 这些提示的错误码会随换料步骤不断变化、随后又被清除，导致 notify_error 被反复重置，
+# 一次换料就能刷出十几条企业微信推送。这里用文案关键词识别换料类提示，命中后对该机器
+# 开启一段"静默窗口"：窗口内任何推送(出错告警/即将完成/打印完成)一律不发，只写日志。
+FILAMENT_HINT_KEYWORDS = (
+    "料丝", "换料", "进料", "退料", "送料", "出料", "料盘", "料线", "耗材", "断料", "AMS",
+)
+FILAMENT_SILENCE_MIN = 30         # 静默窗口上限(分钟)：每命中一次换料提示就从当前时间重新计时
+FILAMENT_RESUME_GRACE_SEC = 60    # 换料结束判定：静默期内连续"打印中"达到该秒数，即视为换料完成
+NOTIFY_SKIP_FILAMENT = True       # 换料静默总开关（config.json: notify_skip_filament）
+
 state_lock = threading.Lock()
 machine_state = {}          # name -> dict(状态字段)
 jobs_lock = threading.Lock()
@@ -858,6 +871,18 @@ def qywechat_push(text):
         log(f"【企业微信推送】失败: {e}")
 
 
+def is_filament_hint(err):
+    """判断错误文案是否属于"换料/料丝"类的流程提示。
+
+    这类提示是换料操作的交互引导（请拉出料丝 / 请插入进料口 …），不是真正的故障，
+    不应当推送。命中即开启换料静默窗口。
+    """
+    if not err:
+        return False
+    text = str(err)
+    return any(k in text for k in FILAMENT_HINT_KEYWORDS)
+
+
 def first_free_machine(joblist):
     used = {}
     for j in joblist:
@@ -958,7 +983,10 @@ class Printer:
         self.reconnect_gap = RECONNECT_BASE
         self.notify_done = False   # 已完成推送去重
         self.notify_10m = False    # 完成前10分钟推送去重
-        self.notify_error = False  # 出错告警推送去重
+        self.notify_error_text = None    # 出错告警去重键：已推送/已静默过的错误文案
+        self.filament_until = 0.0        # 换料静默截止时间戳（0=未静默）
+        self.filament_print_since = 0.0  # 静默期内"连续打印中"计时起点（用于判定换料结束）
+        self.filament_muted = 0          # 本轮静默已拦下的推送条数（仅日志统计用）
         self.client = self._build()
         with state_lock:
             machine_state[self.name] = {
@@ -1033,6 +1061,8 @@ class Printer:
         """根据当前状态/进度触发企业微信推送（带去重）：
            - 进入"已完成" -> 推送一次完成通知
            - 剩余时间 <= 10 分钟且仍在打印 -> 推送一次"即将完成"提醒
+           - 状态为"出错"且本次有明确错误原因 -> 推送一次出错告警
+           - 换料期间（命中料丝/换料类提示后的静默窗口内）-> 一律不推送
         """
         if not WEBHOOK_URL:
             return
@@ -1041,6 +1071,46 @@ class Printer:
         percent = st.get("percent")
         fname = st.get("file") or "（未知文件）"
         finish = st.get("finish_est") or "未知"
+        err = st.get("error")
+        now = time.time()
+
+        # 0) 换料静默：命中换料类提示 -> 开启/续期静默窗口，本条不推送。
+        #    换料期间打印机上报的错误码会不断变化并反复清除，去重标记挡不住，只能整段静默。
+        if NOTIFY_SKIP_FILAMENT and is_filament_hint(err):
+            # 该文案视为已消费，避免静默结束后补推同一条
+            self.notify_error_text = err
+            self.filament_print_since = 0.0
+            if now >= self.filament_until:
+                # 新一轮换料：重置计数并打一条日志，方便核对静默了哪些内容
+                self.filament_muted = 1
+                log(f"{self.name}: 检测到换料提示，开始静默 {FILAMENT_SILENCE_MIN} 分钟内的所有推送"
+                    f"（换料期间不打扰）| {err}")
+            else:
+                self.filament_muted += 1
+            self.filament_until = now + FILAMENT_SILENCE_MIN * 60
+            return
+
+        # 静默窗口内：任何消息都不推送；但一旦打印机恢复"稳定打印"，说明换料已完成，立即恢复推送
+        if now < self.filament_until:
+            if state == "打印中":
+                if not self.filament_print_since:
+                    self.filament_print_since = now
+                elif now - self.filament_print_since >= FILAMENT_RESUME_GRACE_SEC:
+                    log(f"{self.name}: 已恢复稳定打印，换料静默结束"
+                        f"（本轮静默拦截 {self.filament_muted} 条推送）")
+                    self.filament_until = 0.0
+                    self.filament_print_since = 0.0
+                    self.filament_muted = 0
+                    return
+            else:
+                self.filament_print_since = 0.0
+            self.filament_muted += 1
+            return
+        if self.filament_until:
+            log(f"{self.name}: 换料静默到点结束（本轮静默拦截 {self.filament_muted} 条推送）")
+            self.filament_until = 0.0
+            self.filament_print_since = 0.0
+            self.filament_muted = 0
 
         # 1) 已完成推送
         if state == "已完成":
@@ -1054,8 +1124,9 @@ class Printer:
                     f"> **最终进度**：{percent if isinstance(percent, int) else 100}%\n\n"
                     f"> 该任务已打印完成，请前往取件。"
                 )
-        else:
-            # 非已完成状态，重置标记（下一轮打印可再次提醒）
+        elif state == "打印中":
+            # 只有在真正进入新一轮打印时才重置标记，避免"已完成→出错/暂停→已完成"的
+            # 状态抖动导致同一次完成被重复推送。
             self.notify_done = False
 
         # 2) 完成前 10 分钟提醒（仅"打印中"且剩余 0<remain<=10，且已实际运行 >= REMIND_GRACE_MIN 分钟）
@@ -1079,11 +1150,12 @@ class Printer:
             # 剩余 > 10 或非打印中，重置标记（下次进入窗口可再提醒）
             self.notify_10m = False
 
-        # 3) 出错告警：状态为"出错"且本次有明确错误原因 -> 推送一次（去重）
-        err = st.get("error")
+        # 3) 出错告警：状态为"出错"且本次有明确错误原因 -> 推送一次。
+        #    按"错误文案"去重：同一文案只推一次；换料类文案已在开头整段静默；
+        #    静默期内出现的非换料真实故障不即时推送，但不会丢——静默结束后会补推一次。
         if state == "出错" and err:
-            if not self.notify_error:
-                self.notify_error = True
+            if self.notify_error_text != err:
+                self.notify_error_text = err
                 qywechat_push(
                     f"## ⚠️ 打印出错告警\n"
                     f"> **机器**：{self.name}\n"
@@ -1095,7 +1167,7 @@ class Printer:
                 )
         else:
             # 非出错状态，重置标记（下次再出错可再提醒）
-            self.notify_error = False
+            self.notify_error_text = None
 
     def _on_disconnect(self, *args):
         self.connected = False
@@ -1344,10 +1416,24 @@ def main():
         global ALLOWED_IPS
         ALLOWED_IPS = [str(x).strip() for x in allowed]
         log("操作白名单已覆盖为: " + ", ".join(ALLOWED_IPS))
-    global WEBHOOK_URL
+    global WEBHOOK_URL, NOTIFY_SKIP_FILAMENT, FILAMENT_SILENCE_MIN, FILAMENT_HINT_KEYWORDS
     WEBHOOK_URL = (c.get("webhook_url") or "").strip()
+    # 换料静默相关配置（可选，缺省用内置默认值）
+    if isinstance(c.get("notify_skip_filament"), bool):
+        NOTIFY_SKIP_FILAMENT = c["notify_skip_filament"]
+    silence_min = c.get("notify_filament_silence_min")
+    if isinstance(silence_min, (int, float)) and silence_min > 0:
+        FILAMENT_SILENCE_MIN = int(silence_min)
+    kw = c.get("notify_filament_keywords")
+    if isinstance(kw, list) and kw:
+        FILAMENT_HINT_KEYWORDS = tuple(str(x) for x in kw if str(x).strip())
     if WEBHOOK_URL:
         log("企业微信推送已启用")
+        if NOTIFY_SKIP_FILAMENT:
+            log(f"换料静默已开启：命中换料提示后 {FILAMENT_SILENCE_MIN} 分钟内不推送任何消息"
+                f"（关键词：{'/'.join(FILAMENT_HINT_KEYWORDS)}）")
+        else:
+            log("换料静默已关闭（换料期间仍会推送）")
     else:
         log("未配置 webhook_url，企业微信推送关闭")
     machines = c.get("machines") or []
