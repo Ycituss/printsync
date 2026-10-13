@@ -919,6 +919,36 @@ def create_job(body):
     return job
 
 
+def create_jobs_batch(items):
+    """批量添加：在 jobs_lock 内一次性 append 所有 job 并只调用一次 save_jobs，
+    因此整批只生成【一个】历史快照（避免逐条添加时 N 个文件产生 N 个快照）。
+    返回实际创建成功的 job 列表（忽略空名称）。"""
+    created = []
+    with jobs_lock:
+        for body in (items or []):
+            if not isinstance(body, dict):
+                continue
+            name = str(body.get("name", "") or "").strip()
+            if not name:
+                continue
+            job = {
+                "id": new_id(),
+                "name": name,
+                "status": body.get("status") or "待打印",
+                "machine": body.get("machine") or "",
+                "qty": int(body.get("qty") or 0),
+                "note": body.get("note") or "",
+                "addedAt": body.get("addedAt") or today_iso(),
+            }
+            if job["status"] not in VALID_STATUS:
+                job["status"] = "待打印"
+            jobs.append(job)
+            created.append(job)
+        if created:
+            save_jobs()  # 整批只写盘一次 -> 只生成一个快照
+    return created
+
+
 def update_job(jid, body):
     with jobs_lock:
         for j in jobs:
@@ -1334,6 +1364,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "name required"}, 400)
             job = create_job(body)
             return self._json(job, 201)
+        if path == "/api/jobs/batch":
+            items = body.get("jobs")
+            if not isinstance(items, list) or not items:
+                return self._json({"error": "jobs[] required"}, 400)
+            if len(items) > 500:
+                return self._json({"error": "too many jobs (max 500)"}, 400)
+            created = create_jobs_batch(items)
+            if not created:
+                return self._json({"error": "no valid job (empty names?)"}, 400)
+            return self._json({"jobs": created, "count": len(created)}, 201)
         m = re.match(r"^/api/jobs/([^/]+)/next$", path)
         if m:
             job = advance_job(urllib.parse.unquote(m.group(1)))

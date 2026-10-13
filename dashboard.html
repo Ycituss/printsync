@@ -459,6 +459,11 @@
   }
   function deleteJob(id) { return api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' }); }
   function clearAll() { return api('/api/jobs', { method: 'DELETE' }); }
+  // 批量添加：一次请求创建多条，后端整批只生成【一个】快照
+  function addJobsBatch(items) {
+    return api('/api/jobs/batch', { method: 'POST', body: JSON.stringify({ jobs: items }) })
+      .then(function (res) { return res; });
+  }
   function loadJobs() { return api('/api/jobs').catch(function () { return []; }); }
 
   // ---------- render ----------
@@ -1088,20 +1093,21 @@
       return;
     }
 
-    // 添加模式：按行拆分批量创建（每行一个文件名）
+    // 添加模式：按行拆分批量创建（每行一个文件名），整批走一次请求 -> 只生成 1 个快照
     var names = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
     if (names.length === 0) { toast('请填写至少一个文件名称', 'err'); el('fName').focus(); return; }
     if (names.length > 1) {
       if (!confirm('将批量添加 ' + names.length + ' 个文件记录（共用当前状态/机器/数量/备注），确认？')) return;
     }
     p.disabled = true; p.textContent = '保存中… (' + names.length + ')';
-    var tasks = names.map(function (n) {
-      return addJob({ name: n, status: status, machine: machine, qty: qty, note: note, addedAt: '' });
+    var items = names.map(function (n) {
+      return { name: n, status: status, machine: machine, qty: qty, note: note, addedAt: '' };
     });
-    Promise.all(tasks).then(function () {
+    addJobsBatch(items).then(function (res) {
       try { localStorage.removeItem(FORM_KEY); } catch (e) {}
       closeEditor(); refresh();
-      toast(names.length > 1 ? ('已批量添加 ' + names.length + ' 个文件') : '已保存', 'ok');
+      var c = (res && res.count) || names.length;
+      toast(c > 1 ? ('已批量添加 ' + c + ' 个文件') : '已保存', 'ok');
     }).catch(function () { closeEditor(); showRollbackModal([{ name: names.length + ' 个文件', desc: '批量添加未能保存到服务器' }]); })
       .finally(function () { p.disabled = false; p.textContent = '保存'; });
   }
