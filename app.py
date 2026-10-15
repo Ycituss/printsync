@@ -421,8 +421,13 @@ REMIND_GRACE_MIN = 3
 # 这些提示的错误码会随换料步骤不断变化、随后又被清除，导致 notify_error 被反复重置，
 # 一次换料就能刷出十几条企业微信推送。这里用文案关键词识别换料类提示，命中后对该机器
 # 开启一段"静默窗口"：窗口内任何推送(出错告警/即将完成/打印完成)一律不发，只写日志。
+#
+# ⚠️ 关键词收紧（2026-10-15 修）：只保留「强换料引导词」。原来含 耗材/AMS/料盘/断料，
+# 这几个词在带 AMS 机器的真实故障描述（如「耗材送往挤出机失败，可能是料盘卡住或 AMS
+# 特氟龙管未接上」）里高频出现，会被误判成换料而静默掉真故障。单色机(机器1/2/3)的换料
+# 提示必含 换料/料丝/进料 之一，移除后仍能命中静默；而 AMS 机的真实故障不再误判。
 FILAMENT_HINT_KEYWORDS = (
-    "料丝", "换料", "进料", "退料", "送料", "出料", "料盘", "料线", "耗材", "断料", "AMS",
+    "料丝", "换料", "进料", "退料", "送料", "出料", "料线",
 )
 FILAMENT_SILENCE_MIN = 30         # 静默窗口上限(分钟)：每命中一次换料提示就从当前时间重新计时
 FILAMENT_RESUME_GRACE_SEC = 60    # 换料结束判定：静默期内连续"打印中"达到该秒数，即视为换料完成
@@ -1061,31 +1066,36 @@ class Printer:
         log(f"{self.name}: MQTT 已连接 ({self.ip})")
 
     def _on_message(self, client, userdata, msg):
-        st = extract_state(msg.payload)
-        if not st:
-            return
-        with state_lock:
-            prev = machine_state.get(self.name)
-            # 首次收到：prev 为空则用解析结果直接建；否则合并保持状态粘性
-            if prev is None:
-                merged = {
-                    "state": st["状态"] or "在线",
-                    "file": st["当前文件"], "percent": st["进度"],
-                    "remain": st["剩余分钟"], "temp": st["喷嘴温度"],
-                    "updated": now_iso(), "connected": True,
-                    "finish_est": st.get("预计完成"),
-                    "error": st.get("错误"), "error_code": st.get("错误码"),
-                    # 记录打印开始时间(仅"打印中"时有效)，用于"即将完成"提醒防抖
-                    "print_start_ts": time.time() if (st["状态"] == "打印中") else None,
-                }
-            else:
-                merged = merge_state(prev, st)
-                merged["updated"] = now_iso()
-                merged["connected"] = True
-            machine_state[self.name] = merged
-        # 推送检测（企业微信）：在锁外执行，避免阻塞 MQTT 线程
-        self._notify_check(merged)
-        self.last_msg_ts = time.time()
+        try:
+            st = extract_state(msg.payload)
+            if not st:
+                return
+            with state_lock:
+                prev = machine_state.get(self.name)
+                # 首次收到：prev 为空则用解析结果直接建；否则合并保持状态粘性
+                if prev is None:
+                    merged = {
+                        "state": st["状态"] or "在线",
+                        "file": st["当前文件"], "percent": st["进度"],
+                        "remain": st["剩余分钟"], "temp": st["喷嘴温度"],
+                        "updated": now_iso(), "connected": True,
+                        "finish_est": st.get("预计完成"),
+                        "error": st.get("错误"), "error_code": st.get("错误码"),
+                        # 记录打印开始时间(仅"打印中"时有效)，用于"即将完成"提醒防抖
+                        "print_start_ts": time.time() if (st["状态"] == "打印中") else None,
+                    }
+                else:
+                    merged = merge_state(prev, st)
+                    merged["updated"] = now_iso()
+                    merged["connected"] = True
+                machine_state[self.name] = merged
+            # 推送检测（企业微信）：在锁外执行，避免阻塞 MQTT 线程
+            self._notify_check(merged)
+            self.last_msg_ts = time.time()
+        except Exception as e:
+            # 关键防御：paho 的 loop 后台线程中，回调抛出的任何未捕获异常都会直接杀死线程，
+            # 导致该机永久静默失联（_on_disconnect 也不会触发）。这里吞掉异常只记录日志，保活线程。
+            log(f"{self.name}: 处理 MQTT 消息异常(已忽略，保活监听线程): {e}")
 
     def _notify_check(self, st):
         """根据当前状态/进度触发企业微信推送（带去重）：
@@ -1244,18 +1254,45 @@ class Printer:
             self.reconnect_gap = min(self.reconnect_gap * 2, 60)
             self.reconnect_at = time.time() + self.reconnect_gap
 
+    def _rebuild(self):
+        """MQTT 监听线程已崩溃时的自愈：loop_start() 的后台线程一旦因底层异常
+        (如收到畸形/截断的 MQTT 包导致 paho 内部 struct.error) 死亡，paho 不会自动重启，
+        且该机 connected 仍为 True、_on_disconnect 不触发，printer_loop 便永远不会重连。
+        这里彻底重建 client 并令 printer_loop 在下一轮立即重连。"""
+        try:
+            self.client.loop_stop()
+        except Exception:
+            pass
+        try:
+            self.client.disconnect()
+        except Exception:
+            pass
+        try:
+            self.client = self._build()
+        except Exception as e:
+            log(f"{self.name}: 重建 MQTT client 失败: {e}")
+        self.connected = False
+        self.reconnect_at = time.time() + RECONNECT_BASE  # 节流，避免畸形包造成疯狂重建循环
+        log(f"{self.name}: MQTT 监听线程已崩溃，已重建 client 并准备重连")
+
     def tick(self, now):
         # 周期性重新请求完整状态（空闲机可能只发心跳）
         if self.connected and (now - self.last_pushall_ts) > PUSHALL_INTERVAL:
             self._pushall()
             self.last_pushall_ts = now
-        # 掉线判定
+        # 失联/掉线判定
         if self.last_msg_ts and (now - self.last_msg_ts) > OFFLINE_AFTER:
+            silent = self.connected  # True=仍标记在线却长时间无消息 => 监听线程可能已崩(未走 disconnect)
             with state_lock:
                 if self.name in machine_state:
                     machine_state[self.name]["state"] = "未连接"
                     machine_state[self.name]["connected"] = False
             self.last_msg_ts = now  # 防止刷屏
+            if silent:
+                # 正常断开会先触发 _on_disconnect(置 connected=False)；走到这里仍 connected=True，
+                # 几乎只能是 loop_start 的后台线程已崩溃。触发重建，避免永久静默失联。
+                log(f"{self.name}: 长时间无消息且仍标记在线，判定 MQTT 监听线程已崩溃，触发重建")
+                self._rebuild()
 
 
 def printer_loop(printers):

@@ -4,7 +4,7 @@
   "webhook_url": "",
   "notify_skip_filament": true,
   "notify_filament_silence_min": 30,
-  "notify_filament_keywords": ["料丝", "换料", "进料", "退料", "送料", "出料", "料盘", "料线", "耗材", "断料", "AMS"],
+  "notify_filament_keywords": ["料丝", "换料", "进料", "退料", "送料", "出料", "料线"],
   "allowed_ips": ["192.168.1.26"],
   "machines": [
     {

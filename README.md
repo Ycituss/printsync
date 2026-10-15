@@ -141,7 +141,7 @@ python app.py --config config.json --port 8000
 | `webhook_url` | 企业微信群机器人地址；留空则不推送通知 |
 | `notify_skip_filament` | 换料静默开关，默认 `true`；开启后换料期间不推送任何消息 |
 | `notify_filament_silence_min` | 换料静默窗口（分钟），默认 `30`；命中一次换料提示即重新计时 |
-| `notify_filament_keywords` | 可选，自定义「换料类提示」的关键词列表，覆盖内置默认值 |
+| `notify_filament_keywords` | 可选，自定义「换料类提示」关键词列表，覆盖内置默认值。内置默认：`料丝/换料/进料/退料/送料/出料/料线`（已剔除 耗材/AMS/料盘/断料 等 AMS 机真实故障高频词，避免把真故障当换料静默） |
 | `allowed_ips` | 可「编辑」的客户端 IP 白名单；覆盖代码内默认值 |
 | `machines[].name` | 机器显示名（与看板一一对应） |
 | `machines[].label` | 机器短标签（如 `01`） |
