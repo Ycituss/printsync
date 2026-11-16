@@ -128,6 +128,8 @@
   .stat-label { flex:0 0 90px; font-size:12px; display:flex; align-items:center; gap:6px; }
   .stat-track { flex:1 1 auto; height:12px; background:#f1f4f9; border-radius:6px; overflow:hidden; }
   .stat-fill { height:100%; border-radius:6px; transition:width .3s; }
+  /* 固定满格（归档）：加细斜纹，提示这不是按比例算出来的长度 */
+  .stat-fill-fixed { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.28) 0 4px, rgba(255,255,255,0) 4px 8px); }
   .stat-num { flex:0 0 26px; text-align:right; font-weight:700; font-size:12px; }
 
   /* footer */
@@ -420,7 +422,7 @@
     '待摆盘填表': '#722ED1',
     '已完成': '#52C41A',
     '已放弃': '#8C8C8C',
-    '归档': '#13C2C2'
+    '归档': '#64748B'   // 石板灰蓝：终态归档，区别于「已完成」绿与「已放弃」灰
   };
   var MSTATE_COLORS = {
     '空闲': '#52C41A',
@@ -1027,14 +1029,24 @@
     var box = el('statsBars'); box.innerHTML = '';
     var counts = {}; STATUSES.forEach(function (s) { counts[s] = 0; });
     jobs.forEach(function (j) { if (counts[j.status] != null) counts[j.status]++; });
+    // 「归档」是终态，数量通常远大于在制状态：固定满格显示，且不参与自适应比例计算，
+    // 否则归档一多就会把其它状态的进度条全压成一条细线。
+    var FIXED_FULL = { '归档': true };
     var max = 1;
-    STATUSES.forEach(function (s) { if (counts[s] > max) max = counts[s]; });
+    STATUSES.forEach(function (s) {
+      if (FIXED_FULL[s]) return;
+      if (counts[s] > max) max = counts[s];
+    });
     STATUSES.forEach(function (s) {
       var cnt = counts[s];
+      var isFull = !!FIXED_FULL[s];
+      var pct = isFull ? (cnt > 0 ? 100 : 0) : (cnt / max * 100);
       var row = document.createElement('div'); row.className = 'stat-row';
       row.innerHTML =
         '<div class="stat-label"><span class="dot" style="background:' + COLORS[s] + '"></span>' + s + '</div>' +
-        '<div class="stat-track"><div class="stat-fill" style="width:' + (cnt / max * 100) + '%;background:' + COLORS[s] + '"></div></div>' +
+        '<div class="stat-track"' + (isFull ? ' title="归档为终态，固定满格显示，不参与其它状态的自适应比例"' : '') + '>' +
+          '<div class="stat-fill' + (isFull ? ' stat-fill-fixed' : '') + '" style="width:' + pct + '%;background:' + COLORS[s] + '"></div>' +
+        '</div>' +
         '<div class="stat-num">' + cnt + '</div>';
       box.appendChild(row);
     });
