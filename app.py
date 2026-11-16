@@ -954,6 +954,30 @@ def create_jobs_batch(items):
     return created
 
 
+def batch_set_status(ids, status):
+    """批量调整状态：在 jobs_lock 内一次性修改所有选中的 job，且只调用一次 save_jobs，
+    因此整批只生成【一个】历史快照（多选卡片统一调状态视为一次操作）。
+    返回 {count, changed:[{id,name,from,to}]}，ids 中不存在的条目忽略。"""
+    if status not in VALID_STATUS:
+        return {"count": 0, "changed": [], "error": "invalid status"}
+    idset = set(str(x) for x in (ids or []))
+    changed = []
+    with jobs_lock:
+        for j in jobs:
+            if j.get("id") not in idset:
+                continue
+            prev = j.get("status")
+            if prev == status:
+                continue  # 已经是目标状态，不算改动
+            j["status"] = status
+            if status == "打印中" and not j.get("machine"):
+                j["machine"] = first_free_machine(jobs)
+            changed.append({"id": j.get("id"), "name": j.get("name", ""), "from": prev, "to": status})
+        if changed:
+            save_jobs()  # 整批只写盘一次 -> 只生成一个快照
+    return {"count": len(changed), "changed": changed}
+
+
 def update_job(jid, body):
     with jobs_lock:
         for j in jobs:
@@ -1401,6 +1425,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "name required"}, 400)
             job = create_job(body)
             return self._json(job, 201)
+        if path == "/api/jobs/batch-status":
+            ids = body.get("ids")
+            status = body.get("status")
+            if not isinstance(ids, list) or not ids:
+                return self._json({"error": "ids[] required"}, 400)
+            if status not in VALID_STATUS:
+                return self._json({"error": "invalid status"}, 400)
+            return self._json(batch_set_status(ids, status), 200)
         if path == "/api/jobs/batch":
             items = body.get("jobs")
             if not isinstance(items, list) or not items:

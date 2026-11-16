@@ -79,6 +79,19 @@
   .mini { border:none; border-radius:6px; padding:5px 9px; font-size:12px; cursor:pointer; background:#f1f4f9; color:var(--ink); min-height:30px; white-space:nowrap; }
   .mini.primary { background:var(--accent); color:#fff; font-weight:600; }
   .c-actions { display:flex; gap:5px; flex-wrap:nowrap; margin-top:7px; }
+  /* 多选：卡片复选框 + 选中高亮 + 每列全选 */
+  .card { position:relative; }
+  .card.sel-enabled .c-name { padding-right:20px; }
+  .card-sel { position:absolute; top:6px; right:6px; width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--accent); }
+  .card.selected { border-color:var(--accent); border-left-color:var(--accent); background:#f5f9ff; box-shadow:0 0 0 2px rgba(91,141,239,.25); }
+  .col-left { display:flex; align-items:center; gap:7px; min-width:0; }
+  .col-selall { width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--accent); }
+  /* 批量操作条（浮动在底部，toast 之上、弹窗之下） */
+  #bulkBar { position:fixed; left:50%; bottom:78px; transform:translateX(-50%) translateY(20px); background:#fff; border:1px solid var(--line); box-shadow:0 8px 28px rgba(30,50,90,.18); border-radius:14px; padding:10px 14px; display:none; align-items:center; gap:10px; z-index:45; max-width:calc(100vw - 24px); flex-wrap:wrap; justify-content:center; }
+  #bulkBar.show { display:flex; }
+  .bulk-count { font-weight:700; color:var(--accent); white-space:nowrap; }
+  .bulk-sel { padding:7px 10px; font-size:14px; border:1px solid var(--line); border-radius:8px; background:#fbfcfe; color:var(--ink); min-height:40px; }
+  @media (max-width:768px) { #bulkBar { bottom:74px; } }
 
   /* machines */
   .machine-section { padding:12px; min-width:0; overflow:hidden; }
@@ -315,6 +328,12 @@
   </div>
 </div>
 <input id="importFile" type="file" accept="application/json" class="hidden">
+<div id="bulkBar">
+  <span class="bulk-count">已选 <span id="bulkCount">0</span> 个</span>
+  <select id="bulkStatus" class="bulk-sel"></select>
+  <button id="bulkApply" class="mini primary">批量调整状态</button>
+  <button id="bulkClear" class="mini">取消选择</button>
+</div>
 <div id="toast" class="toast"></div>
 <div id="rbModal" class="rb-mask">
   <div class="rb-box">
@@ -397,6 +416,7 @@
   var FORM_KEY = 'wb_3dprint_form_cache';
   var JOBS = [];
   var PMAP = {};
+  var selectedIds = Object.create(null);  // 多选集合：id -> true（跨列保留，批量操作后清空）
   var editingId = null;
   var searchTerm = '';
   var canEdit = false;
@@ -475,6 +495,17 @@
     c.dataset.id = j.id;
     c.dataset.status = j.status;
     c.style.borderLeftColor = COLORS[j.status] || '#8C8C8C';
+    if (selectedIds[j.id]) c.classList.add('selected');
+    if (canEdit) {
+      c.classList.add('sel-enabled');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'card-sel';
+      cb.checked = !!selectedIds[j.id];
+      cb.title = '选择此文件（可多选后批量调整状态）';
+      cb.addEventListener('click', function (e) { e.stopPropagation(); });
+      cb.addEventListener('change', function () { toggleSelect(j.id, cb.checked); });
+      c.appendChild(cb);
+    }
     var meta = [];
     meta.push('<span class="tag status" style="background:' + (COLORS[j.status] || '#8C8C8C') + '">' + esc(j.status) + '</span>');
     if (j.machine) meta.push('<span class="tag">' + esc(j.machine) + '</span>');
@@ -529,6 +560,77 @@
            (j.machine && j.machine.toLowerCase().indexOf(q) >= 0);
   }
   var hlTimer = null;
+
+  // ---------- 多选 / 批量调状态 ----------
+  function selectedCount() { return Object.keys(selectedIds).length; }
+  function toggleSelect(id, on) {
+    if (on) selectedIds[id] = true; else delete selectedIds[id];
+    var cardEl = el('board').querySelector('.card[data-id="' + id + '"]');
+    if (cardEl) cardEl.classList.toggle('selected', !!on);
+    updateBulkBar();
+  }
+  function toggleSelectAll(status, on) {
+    var body = el('board').querySelector('.col-body[data-status="' + status + '"]');
+    if (!body) return;
+    body.querySelectorAll('.card').forEach(function (c) {
+      var id = c.dataset.id;
+      if (on) selectedIds[id] = true; else delete selectedIds[id];
+      c.classList.toggle('selected', !!on);
+      var cb = c.querySelector('.card-sel'); if (cb) cb.checked = !!on;
+    });
+    var headCb = el('board').querySelector('.col-selall[data-status="' + status + '"]');
+    if (headCb) headCb.checked = !!on;
+    updateBulkBar();
+  }
+  function clearSelection() {
+    selectedIds = Object.create(null);
+    el('board').querySelectorAll('.card.selected').forEach(function (c) { c.classList.remove('selected'); });
+    el('board').querySelectorAll('.card-sel').forEach(function (cb) { cb.checked = false; });
+    el('board').querySelectorAll('.col-selall').forEach(function (cb) { cb.checked = false; });
+    updateBulkBar();
+  }
+  function updateBulkBar() {
+    var bar = el('bulkBar'); if (!bar) return;
+    var n = selectedCount();
+    el('bulkCount').textContent = n;
+    if (n > 0) bar.classList.add('show'); else bar.classList.remove('show');
+  }
+  // 批量调整：乐观更新本地状态 -> 一次请求 -> 后端整批只写盘一次(1 个快照)
+  function bulkApplyStatus() {
+    var ids = Object.keys(selectedIds);
+    if (!ids.length) return;
+    var target = el('bulkStatus').value;
+    if (!target) { toast('请选择目标状态', 'err'); return; }
+    var affected = [];
+    ids.forEach(function (id) {
+      for (var i = 0; i < JOBS.length; i++) {
+        if (JOBS[i].id === id) { affected.push({ job: JOBS[i], prev: JOBS[i].status }); break; }
+      }
+    });
+    if (!affected.length) return;
+    if (!confirm('将选中的 ' + affected.length + ' 个文件统一调整为「' + target + '」？\n本次批量操作只生成 1 个数据快照。')) return;
+    var btn = el('bulkApply'); btn.disabled = true; btn.textContent = '调整中…';
+    // 乐观更新
+    affected.forEach(function (a) {
+      a.job.status = target;
+      if (target === '打印中' && !a.job.machine) a.job.machine = firstFreeMachine(JOBS);
+    });
+    renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+    clearSelection();
+    batchSetStatus(ids, target).then(function (res) {
+      toast('已将 ' + ((res && res.count) || affected.length) + ' 个文件调整为「' + target + '」', 'ok');
+    }).catch(function () {
+      affected.forEach(function (a) { a.job.status = a.prev; });
+      renderBoard(JOBS); renderStats(JOBS); renderArchive(JOBS);
+      showRollbackModal(affected.map(function (a) {
+        return { name: a.job.name || ('#' + a.job.id), desc: '状态「' + target + '」→「' + a.prev + '」已撤销' };
+      }));
+    }).finally(function () { btn.disabled = false; btn.textContent = '批量调整状态'; });
+  }
+  function batchSetStatus(ids, status) {
+    return api('/api/jobs/batch-status', { method: 'POST', body: JSON.stringify({ ids: ids, status: status }) });
+  }
+
   function renderBoard(jobs) {
     var board = el('board');
     // 渲染前记录各列滚动位置，渲染后恢复，避免点击流程/刷新导致滚动条被重置
@@ -547,7 +649,13 @@
       var list = view.filter(function (j) { return j.status === st; });
       var head = document.createElement('div'); head.className = 'col-head';
       head.style.borderTopColor = COLORS[st];
-      head.innerHTML = '<span class="col-title">' + st + '</span><span class="col-count">' + list.length + '</span>';
+      var allSelected = list.length > 0 && list.every(function (j) { return !!selectedIds[j.id]; });
+      var selAllHtml = canEdit
+        ? '<label class="col-left" title="全选/取消本列"><input type="checkbox" class="col-selall" data-status="' + st + '"' + (allSelected ? ' checked' : '') + '><span class="col-title">' + st + '</span></label>'
+        : '<span class="col-title">' + st + '</span>';
+      head.innerHTML = selAllHtml + '<span class="col-count">' + list.length + '</span>';
+      var selAllCb = head.querySelector('.col-selall');
+      if (selAllCb) selAllCb.addEventListener('change', function () { toggleSelectAll(st, selAllCb.checked); });
       var body = document.createElement('div'); body.className = 'col-body'; body.dataset.status = st;
       if (list.length === 0) {
         var e = document.createElement('div'); e.className = 'col-empty'; e.textContent = (searchTerm ? '无匹配' : '暂无任务'); body.appendChild(e);
@@ -575,6 +683,7 @@
         if (b) b.scrollTop = savedScroll[st];
       }
     });
+    updateBulkBar();  // 重渲染后同步多选条（选中态已在 card() 中按 selectedIds 恢复）
   }
   function scheduleHlClear() {
     if (hlTimer) clearTimeout(hlTimer);
@@ -890,6 +999,7 @@
     if (el('addBtn')) el('addBtn').style.display = on ? '' : 'none';
     if (el('clearBtn')) el('clearBtn').style.display = on ? '' : 'none';
     if (el('importBtn')) el('importBtn').style.display = on ? '' : 'none';
+    if (!on && selectedCount()) clearSelection();  // 只读模式不留多选
   }
   function refresh() {
     setSync('同步中…', 'warn');
@@ -1435,6 +1545,9 @@
     el('bkClose').addEventListener('click', closeBackups);
     el('bkRestore').addEventListener('click', restoreBackup);
     el('backupModal').addEventListener('click', function (e) { if (e.target === el('backupModal')) closeBackups(); });
+    fillSelect(el('bulkStatus'), STATUSES);
+    el('bulkApply').addEventListener('click', bulkApplyStatus);
+    el('bulkClear').addEventListener('click', clearSelection);
     refresh();
     refreshBackups();
     setInterval(pollMachines, POLL_MS);
