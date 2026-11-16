@@ -81,8 +81,9 @@
   .c-actions { display:flex; gap:5px; flex-wrap:nowrap; margin-top:7px; }
   /* 多选：卡片复选框 + 选中高亮 + 每列全选 */
   .card { position:relative; }
-  .card.sel-enabled .c-name { padding-right:20px; }
-  .card-sel { position:absolute; top:6px; right:6px; width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--accent); }
+  .card.sel-enabled .c-name { padding-right:24px; }
+  .card-sel { position:absolute; top:5px; right:5px; width:17px; height:17px; margin:0; cursor:pointer; accent-color:var(--accent); z-index:3; }
+  .card-sel:hover { transform:scale(1.15); }
   .card.selected { border-color:var(--accent); border-left-color:var(--accent); background:#f5f9ff; box-shadow:0 0 0 2px rgba(91,141,239,.25); }
   .col-left { display:flex; align-items:center; gap:7px; min-width:0; }
   .col-selall { width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--accent); }
@@ -496,16 +497,6 @@
     c.dataset.status = j.status;
     c.style.borderLeftColor = COLORS[j.status] || '#8C8C8C';
     if (selectedIds[j.id]) c.classList.add('selected');
-    if (canEdit) {
-      c.classList.add('sel-enabled');
-      var cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.className = 'card-sel';
-      cb.checked = !!selectedIds[j.id];
-      cb.title = '选择此文件（可多选后批量调整状态）';
-      cb.addEventListener('click', function (e) { e.stopPropagation(); });
-      cb.addEventListener('change', function () { toggleSelect(j.id, cb.checked); });
-      c.appendChild(cb);
-    }
     var meta = [];
     meta.push('<span class="tag status" style="background:' + (COLORS[j.status] || '#8C8C8C') + '">' + esc(j.status) + '</span>');
     if (j.machine) meta.push('<span class="tag">' + esc(j.machine) + '</span>');
@@ -520,6 +511,18 @@
       html += '</div>';
     }
     c.innerHTML = html;
+    // 复选框必须放在 innerHTML 之后挂载：innerHTML 赋值会清空卡片已有子节点
+    if (canEdit) {
+      c.classList.add('sel-enabled');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'card-sel';
+      cb.checked = !!selectedIds[j.id];
+      cb.title = '选择此文件（可多选后批量调整状态）';
+      cb.setAttribute('aria-label', '选择 ' + (j.name || ''));
+      cb.addEventListener('click', function (e) { e.stopPropagation(); });
+      cb.addEventListener('change', function () { toggleSelect(j.id, cb.checked); });
+      c.appendChild(cb);
+    }
     c.addEventListener('dragstart', function (e) {
       e.dataTransfer.setData('text/plain', j.id);
       e.dataTransfer.effectAllowed = 'move';
@@ -567,7 +570,20 @@
     if (on) selectedIds[id] = true; else delete selectedIds[id];
     var cardEl = el('board').querySelector('.card[data-id="' + id + '"]');
     if (cardEl) cardEl.classList.toggle('selected', !!on);
+    refreshColHead();
     updateBulkBar();
+  }
+  // 同步每列列头全选框：全选 / 部分选中(indeterminate) / 未选
+  function refreshColHead() {
+    el('board').querySelectorAll('.col').forEach(function (col) {
+      var headCb = col.querySelector('.col-selall');
+      if (!headCb) return;
+      var cbs = col.querySelectorAll('.card-sel');
+      var n = 0;
+      cbs.forEach(function (cb) { if (cb.checked) n++; });
+      headCb.checked = cbs.length > 0 && n === cbs.length;
+      headCb.indeterminate = n > 0 && n < cbs.length;
+    });
   }
   function toggleSelectAll(status, on) {
     var body = el('board').querySelector('.col-body[data-status="' + status + '"]');
@@ -578,8 +594,7 @@
       c.classList.toggle('selected', !!on);
       var cb = c.querySelector('.card-sel'); if (cb) cb.checked = !!on;
     });
-    var headCb = el('board').querySelector('.col-selall[data-status="' + status + '"]');
-    if (headCb) headCb.checked = !!on;
+    refreshColHead();
     updateBulkBar();
   }
   function clearSelection() {
@@ -587,6 +602,7 @@
     el('board').querySelectorAll('.card.selected').forEach(function (c) { c.classList.remove('selected'); });
     el('board').querySelectorAll('.card-sel').forEach(function (cb) { cb.checked = false; });
     el('board').querySelectorAll('.col-selall').forEach(function (cb) { cb.checked = false; });
+    refreshColHead();
     updateBulkBar();
   }
   function updateBulkBar() {
@@ -684,6 +700,7 @@
       }
     });
     updateBulkBar();  // 重渲染后同步多选条（选中态已在 card() 中按 selectedIds 恢复）
+    refreshColHead(); // 重渲染后同步列头全选框（含部分选中的三态）
   }
   function scheduleHlClear() {
     if (hlTimer) clearTimeout(hlTimer);
@@ -1398,8 +1415,10 @@
           var c = card(j);
           var ro = c.cloneNode(true);
           ro.draggable = false;
-          ro.classList.remove('dragging');
+          ro.classList.remove('dragging', 'sel-enabled', 'selected', 'hl');
           ro.querySelectorAll('.c-actions').forEach(function (a) { a.remove(); });
+          // 只读预览不显示多选勾选框（克隆节点没有监听，勾了会误导）
+          ro.querySelectorAll('.card-sel').forEach(function (x) { x.remove(); });
           body.appendChild(ro);
         });
       }
