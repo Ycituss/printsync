@@ -44,6 +44,10 @@
   .arc-name { font-size:13px; font-weight:600; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .arc-machine { font-size:11px; color:#fff; background:#13C2C2; padding:1px 7px; border-radius:20px; flex:0 0 auto; }
   .arc-empty { color:var(--sub); font-size:12px; padding:8px 4px; }
+  /* 归档大模态框：卡片网格 */
+  .arc-body { flex:1; min-height:0; overflow-y:auto; padding:14px; display:flex; flex-wrap:wrap; gap:10px; align-content:flex-start; background:#f7f9fc; }
+  .arc-body .card { width:190px; max-width:100%; }
+  .arc-body .arc-empty { width:100%; text-align:center; padding:48px 0; font-size:13px; }
 
   /* today: 已移除「今天要处理」区块 */
   .empty { color:var(--sub); font-size:12px; padding:8px 4px; }
@@ -189,6 +193,8 @@
   .backup-section { padding:14px; }
   .bk-modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:60; padding:24px; }
   .bk-modal.show { display:flex; }
+  /* 归档框层级要低于编辑弹窗(#modal z-index:50)，否则点归档卡片打开的编辑器会被盖住 */
+  #archiveModal.arc-modal { z-index:48; }
   .bk-sheet { width:min(1120px,96vw); height:min(82vh,780px); background:#fff; border-radius:12px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,.3); }
   .bk-head { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid #ececec; }
   .bk-title { font-size:16px; font-weight:700; color:#1f1f1f; }
@@ -287,7 +293,7 @@
           <span class="sec-title">归档</span>
           <span class="pill"><b id="archiveCount">0</b></span>
         </div>
-        <div id="archiveList" class="archive-list"></div>
+        <button id="openArchive" class="btn ghost block">查看归档文件</button>
       </div>
 
       <div class="section backup-section">
@@ -356,6 +362,16 @@
     <div class="sheet-actions">
       <button class="btn ghost" onclick="hideMachineModal()">关闭</button>
     </div>
+  </div>
+</div>
+
+<div id="archiveModal" class="bk-modal arc-modal">
+  <div class="bk-sheet">
+    <div class="bk-head">
+      <span class="bk-title">归档文件（<span id="arcModalCount">0</span>）</span>
+      <button id="arcClose" class="btn ghost">关闭</button>
+    </div>
+    <div id="archiveList" class="arc-body"></div>
   </div>
 </div>
 
@@ -1029,19 +1045,30 @@
     var box = el('archiveList'); if (!box) return;
     var list = jobs.filter(function (j) { return j.status === '归档'; });
     var cnt = el('archiveCount'); if (cnt) cnt.textContent = list.length;
+    var mc = el('arcModalCount'); if (mc) mc.textContent = list.length;
+    // 模态框没打开时只更新计数，避免每次轮询都重建一堆卡片
+    if (!el('archiveModal').classList.contains('show')) return;
+    var keepScroll = box.scrollTop;
     box.innerHTML = '';
     if (list.length === 0) {
       box.innerHTML = '<div class="arc-empty">暂无归档文件</div>';
       return;
     }
     list.forEach(function (j) {
-      var item = document.createElement('div'); item.className = 'arc-item';
-      item.innerHTML =
-        '<span class="arc-name">' + esc(j.name) + '</span>' +
-        (j.machine ? '<span class="arc-machine">' + esc(j.machine) + '</span>' : '');
-      item.addEventListener('click', function () { openEditor(j.id); });
-      box.appendChild(item);
+      // 复用看板卡片样式（归档卡片可点开编辑/删除，但不可拖拽）
+      var c = card(j);
+      c.draggable = false;
+      c.classList.remove('hl');
+      box.appendChild(c);
     });
+    box.scrollTop = keepScroll;  // 轮询重建后保持滚动位置
+  }
+  function openArchive() {
+    el('archiveModal').classList.add('show');  // 先显示，再渲染（renderArchive 只在打开时建卡片）
+    renderArchive(JOBS);
+  }
+  function closeArchive() {
+    el('archiveModal').classList.remove('show');
   }
 
   function setSync(text, cls) {
@@ -1599,6 +1626,9 @@
     el('searchClear').addEventListener('click', function () { el('searchInput').value = ''; applySearch(''); el('searchInput').focus(); });
     el('modal').addEventListener('click', function (e) { if (e.target === el('modal')) closeEditor(); });
     el('openBackups').addEventListener('click', openBackups);
+    el('openArchive').addEventListener('click', openArchive);
+    el('arcClose').addEventListener('click', closeArchive);
+    el('archiveModal').addEventListener('click', function (e) { if (e.target === el('archiveModal')) closeArchive(); });
     el('bkClose').addEventListener('click', closeBackups);
     el('bkRestore').addEventListener('click', restoreBackup);
     el('backupModal').addEventListener('click', function (e) { if (e.target === el('backupModal')) closeBackups(); });
